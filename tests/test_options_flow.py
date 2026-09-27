@@ -3,7 +3,6 @@
 from homeassistant.components.alarm_control_panel import AlarmControlPanelEntityFeature
 from homeassistant.const import ATTR_SUPPORTED_FEATURES
 from homeassistant.data_entry_flow import FlowResultType
-import pytest
 
 from custom_components.unifi_protect_alarm_bridge.const import (
     CONF_PROFILE_AWAY,
@@ -14,7 +13,6 @@ from .conftest import setup_entry
 from .helpers import AWAY_ID, ENTITY_ID, HOME_ID, make_profile, mock_config_entry
 
 
-@pytest.mark.skip(reason="entity lands in Task 7")
 async def test_options_flow_updates_mapping_and_reloads(hass, mock_client) -> None:
     mock_client.async_get_profiles.return_value = [
         make_profile(),

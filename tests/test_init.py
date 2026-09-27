@@ -68,7 +68,6 @@ async def test_unload_cancels_socket_task_and_timers(
     assert coordinator._promotion_unsub is None
 
 
-@pytest.mark.skip(reason="entity lands in Task 7")
 @pytest.mark.parametrize(
     ("state", "expected"),
     [("armed", "armed_away"), ("breached", "triggered"), ("arming", "arming")],
