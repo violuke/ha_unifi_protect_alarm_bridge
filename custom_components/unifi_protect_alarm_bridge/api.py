@@ -271,12 +271,20 @@ class UniFiAlarmClient:
         return status, generation, payload
 
     async def _request(self, method: str, path: str) -> Any:
-        if self._csrf_token is None:
-            await self.async_login()
+        fresh = self._csrf_token is None
+        if fresh:
+            await self.async_login(stale_generation=self._generation)
         status, generation, payload = await self._send(method, path)
+        if fresh and status == 403:
+            # A 403 on GET /profiles right after a fresh login means the account
+            # is not Super Admin, not a stale CSRF token: don't waste a login on it.
+            raise InsufficientPermissions(
+                f"{method} {path} is forbidden for this account"
+            )
         if status in (401, 403):
-            # 401: session expired. 403: possibly a stale CSRF token. Either way,
-            # only trust the answer after one fresh login.
+            # 401: session expired. 403: possibly a stale CSRF token on an
+            # established session. Either way, only trust the answer after one
+            # fresh login.
             await self.async_login(stale_generation=generation)
             status, _, payload = await self._send(method, path)
         if status == 401:

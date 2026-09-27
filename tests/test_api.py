@@ -141,8 +141,29 @@ async def test_not_super_admin_after_fresh_login(api_client, fake_console) -> No
     fake_console.super_admin = False
     with pytest.raises(InsufficientPermissions):
         await api_client.async_get_profiles()
-    # The 403 is only trusted after one fresh login.
+    # A 403 right after a fresh login is trusted immediately (spec section 3):
+    # re-login-and-retry is only for a 403 on an already-established session.
+    assert fake_console.login_count == 1
+
+
+async def test_not_super_admin_on_established_session_logs_in_once_more(
+    api_client, fake_console
+) -> None:
+    await api_client.async_get_profiles()
+    fake_console.super_admin = False
+
+    with pytest.raises(InsufficientPermissions):
+        await api_client.async_get_profiles()
+
+    # A 403 on an established session may be a stale CSRF token, so it still
+    # gets one re-login-and-retry before being trusted.
     assert fake_console.login_count == 2
+
+
+async def test_concurrent_fresh_requests_log_in_once(api_client, fake_console) -> None:
+    await asyncio.gather(*(api_client.async_get_profiles() for _ in range(3)))
+
+    assert fake_console.login_count == 1
 
 
 async def test_arm_and_disarm_return_the_updated_profile(api_client) -> None:
