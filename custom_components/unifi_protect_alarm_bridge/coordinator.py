@@ -98,6 +98,7 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         self._written_seq: dict[str, int] = {}
         self._promotion_unsub: CALLBACK_TYPE | None = None
         self._overdue_counts: dict[str, int] = {}
+        self._unexpected_logged = False
 
     @callback
     def async_start_push(self) -> None:
@@ -132,6 +133,7 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
 
         for key in (ISSUE_NOT_SUPER_ADMIN, ISSUE_API_CHANGED, ISSUE_GLOBAL_MODE_OFF):
             self._delete_issue(key)
+        self._unexpected_logged = False
         current = self.data or {}
         merged: dict[str, ArmProfile] = {}
         for profile in profiles:
@@ -161,7 +163,11 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         self.last_unexpected_payload = err.payload
         if await self._async_global_mode_off():
             return
-        LOGGER.warning("Unexpected response from the Alarm Manager API: %s", err)
+        if self._unexpected_logged:
+            LOGGER.debug("Unexpected response from the Alarm Manager API: %s", err)
+        else:
+            self._unexpected_logged = True
+            LOGGER.warning("Unexpected response from the Alarm Manager API: %s", err)
         LOGGER.debug(
             "Unexpected payload: %s", async_redact_data(err.payload, REDACT_KEYS)
         )
@@ -236,7 +242,7 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         try:
             return await action(profile_id)
         except UniFiAlarmError as err:
-            if isinstance(err, AuthFailed):
+            if isinstance(err, (AuthFailed, MfaRequired)):
                 self.config_entry.async_start_reauth(self.hass)
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

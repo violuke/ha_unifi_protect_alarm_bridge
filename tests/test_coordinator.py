@@ -182,6 +182,36 @@ async def test_unexpected_response_raises_api_changed(
     assert _issue(hass, coordinator, ISSUE_API_CHANGED) is None
 
 
+async def test_unexpected_response_warns_only_on_first_occurrence(
+    hass, coordinator, client, caplog
+) -> None:
+    caplog.set_level("DEBUG")
+    client.async_get_profiles.side_effect = UnexpectedResponse("x", {"weird": 1})
+
+    await coordinator.async_refresh()
+    await coordinator.async_refresh()
+
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "Unexpected response" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+
+    client.async_get_profiles.side_effect = None
+    await coordinator.async_refresh()
+    client.async_get_profiles.side_effect = UnexpectedResponse("x", {"weird": 1})
+    caplog.clear()
+    await coordinator.async_refresh()
+
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "Unexpected response" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+
+
 async def test_unexpected_response_in_local_mode_raises_global_mode_off(
     hass, coordinator, client
 ) -> None:
@@ -307,6 +337,18 @@ async def test_action_errors_are_translated(coordinator, client) -> None:
 async def test_action_auth_failure_starts_reauth(hass, coordinator, client) -> None:
     await coordinator.async_refresh()
     client.async_disarm.side_effect = AuthFailed("x")
+
+    with pytest.raises(HomeAssistantError):
+        await coordinator.async_disarm_profile(AWAY_ID)
+    await hass.async_block_till_done()
+
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [flow["context"]["source"] for flow in flows] == ["reauth"]
+
+
+async def test_action_mfa_required_starts_reauth(hass, coordinator, client) -> None:
+    await coordinator.async_refresh()
+    client.async_disarm.side_effect = MfaRequired("x")
 
     with pytest.raises(HomeAssistantError):
         await coordinator.async_disarm_profile(AWAY_ID)
