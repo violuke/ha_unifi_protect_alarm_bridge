@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Run a throwaway Home Assistant with this integration symlinked in, for testing
+# against a real console. Credentials are typed into the HA UI and stay in the
+# gitignored config/.storage directory.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [[ ! -x .venv-dev/bin/hass ]]; then
+  uv venv .venv-dev -p 3.14
+  uv pip install --python .venv-dev "homeassistant==2026.9.4"
+fi
+
+mkdir -p config/custom_components
+ln -sfn ../../custom_components/unifi_protect_alarm_bridge \
+  config/custom_components/unifi_protect_alarm_bridge
+
+exec .venv-dev/bin/hass --config "${PWD}/config" --debug

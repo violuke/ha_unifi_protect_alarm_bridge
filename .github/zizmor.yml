@@ -1,0 +1,8 @@
+# Actions are referenced by tag/branch on purpose: that's the norm for Home
+# Assistant custom integrations, and hassfest/HACS validation are meant to track
+# their latest rules (@master/@main).
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin
