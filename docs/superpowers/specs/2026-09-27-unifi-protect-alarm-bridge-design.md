@@ -38,7 +38,8 @@ All requests go to `https://<host>`. Consoles use self-signed certificates.
   - No `Origin` header was needed, and the CSRF token did not rotate during testing.
   - The client still adopts `X-Updated-CSRF-Token` when present.
   - The client always replaces its stored CSRF token with the one from each login response. If that header is missing, it falls back to the `csrfToken` claim in the TOKEN JWT, as uiprotect does.
-- A 401 means the session has expired, so the client re-logs in (see §4 session rules).
+- **Wrong credentials on login return 403**, not 401 (verified live). A login response of 400, 401 or 403 is `AuthFailed`.
+- A 401 on any later request means the session has expired, so the client re-logs in (see §4 session rules).
 - A 403 is only classified as "not Super Admin" when `GET /profiles` returns 403 **immediately after a fresh login**. A 403 on a POST first triggers one re-login and retry, because a stale CSRF token may also produce 403.
 
 ### Read state
@@ -58,7 +59,7 @@ All requests go to `https://<host>`. Consoles use self-signed certificates.
 - `POST /api/v2/alarms/profiles/{id}/actions/disarm` returns 200 and the updated profile, with `state: "disarmed"`.
 
 ### Push
-- **Endpoint:** `wss://<host>/proxy/protect/ws/updates[?lastUpdateId=<bootstrap.lastUpdateId>]`, authenticated with the session cookie.
+- **Endpoint:** `wss://<host>/proxy/protect/ws/updates`, authenticated with the session cookie. No `lastUpdateId` is needed.
 - **Message format:** each binary message holds two frames, an action frame followed by a data frame. Each frame is:
   - an 8-byte header (`>BBBBI`): packet type, payload format [1=JSON, 2=UTF-8, 3=buffer], deflated flag, reserved, payload size
   - then the payload, zlib-compressed if the deflated flag is set
@@ -66,15 +67,25 @@ All requests go to `https://<host>`. Consoles use self-signed certificates.
 - **Also observed:** `add:event` with `type: "arming"` and `metadata.armProfileId`. This is not needed, because the profile update is the source of truth.
 - **Volume:** the socket is busy, with about 180 messages per 100 s on the test site. Anything that is not `externalArmProfile` is discarded as soon as its action frame has been read.
 
+### Console info (verified)
+`GET /proxy/protect/api/nvr` (about 12 KB, session auth) returns what the integration needs:
+- `mac`, used as the unique ID via `format_mac`
+- `name`
+- `type` (the model)
+- `version` (the Protect version)
+- `featureFlags.useExternalAlarmManager`, which is `true` in Global mode
+
+### Resolved during planning
+- **Unique ID:** `nvr.mac`, as above.
+- **`lastUpdateId`:** `ws/updates` connects and streams without it (verified), so bootstrap is never fetched.
+- **Global mode off:** detected with `featureFlags.useExternalAlarmManager == false` rather than by guessing at the shape of `/profiles`.
+
 ### Not yet verified (resolve during the build; see §11)
-1. **Console unique ID source.** This is resolved first, in build step 2, because the config flow depends on it. Candidates are a UniFi OS system endpoint, otherwise `bootstrap.nvr.mac`. If the ID has to come from bootstrap, fetching about 340 KB during setup, reauth and reconfigure is acceptable.
-2. **Whether `ws/updates` requires `lastUpdateId`.** If it does, the integration fetches bootstrap once per reconnect, never per poll.
-3. **The `breached` payload.** It is deliberately not triggered on a live system, and is assumed to follow the UI enum.
-4. **Arming with activation delay off.** The expected response is `armed` immediately.
-5. **Arming profile B while profile A is armed.** Protect may reject the request, switch profiles, or allow both. The test console has one profile, so this may stay unverified; the entity behaviour in §4 is safe in all three cases.
-6. **What `/profiles` returns when the console is not in Global mode.** Examples: an empty list, 404 or 403. This is needed so the repair in §4 can be precise.
-7. **MFA challenge response shape.** UniFi OS is believed to return HTTP 499 with `MFA_AUTH_REQUIRED`. Until it is verified, detection matches that shape, and anything else falls through to `invalid_auth`.
-8. **Login rate limiting.** UniFi OS is believed to return 429 (`AUTHENTICATION_FAILED_LIMIT_REACHED`). It is handled as a transient error either way.
+1. **The `breached` payload.** It is deliberately not triggered on a live system, and is assumed to follow the UI enum.
+2. **Arming with activation delay off.** The expected response is `armed` immediately.
+3. **Arming profile B while profile A is armed.** Protect may reject the request, switch profiles, or allow both. The test console has one profile, so this may stay unverified; the entity behaviour in §4 is safe in all three cases.
+4. **MFA challenge response shape.** UniFi OS is believed to return HTTP 499 with `MFA_AUTH_REQUIRED`. Until it is verified, detection matches that shape, and anything else falls through to `invalid_auth`.
+5. **Login rate limiting.** UniFi OS is believed to return 429 (`AUTHENTICATION_FAILED_LIMIT_REACHED`). It is handled as a transient error either way.
 
 ## 4. Architecture
 
@@ -90,11 +101,11 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 **Session**
 - A dedicated session: `async_create_clientsession(hass, verify_ssl=<option>, cookie_jar=aiohttp.CookieJar(unsafe=True))`.
   - It is not HA's shared session, so its cookies stay isolated.
-  - It is closed explicitly in `async_unload_entry`, because `auto_cleanup` only closes sessions when HA stops, so every reload would leak one.
+  - It uses the default `auto_cleanup=True`. When the session is created during `async_setup_entry`, HA registers `config_entry.async_on_unload` to close it (verified in HA 2025.11 source), so reloads don't leak sessions. The config flow's short-lived validation session uses `auto_cleanup=False` and is closed in a `finally` block.
 - `verify_ssl` defaults to off.
 
 **Methods**
-- `async_login()`, `async_get_profiles() -> list[ArmProfile]`, `async_arm(profile_id) -> ArmProfile`, `async_disarm(profile_id) -> ArmProfile`.
+- `async_login()`, `async_get_console_info() -> ConsoleInfo`, `async_get_profiles() -> list[ArmProfile]`, `async_arm(profile_id) -> ArmProfile`, `async_disarm(profile_id) -> ArmProfile`.
 - `ArmProfile` is a frozen dataclass parsed from JSON. REST and websocket share the same parser.
 
 **Session rules**
@@ -173,7 +184,7 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 | `InsufficientPermissions` | Repair `not_super_admin` + `UpdateFailed` |
 | `CannotConnect` / `RateLimited` | `UpdateFailed`; the entity goes unavailable |
 | `UnexpectedResponse` | Repair `api_changed` (Protect version, GitHub issues link) + `UpdateFailed` |
-| Non-Global-mode shape (§3 item 6) | Repair `global_mode_off` + `UpdateFailed` |
+| Empty profile list or `UnexpectedResponse`, and `/nvr` shows `useExternalAlarmManager == false` | Repair `global_mode_off` + `UpdateFailed` |
 
 **Websocket auth failure**
 - When the listener reports `AuthFailed`, the coordinator calls `entry.async_start_reauth(hass)`.
@@ -215,7 +226,7 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 - Supported features follow the mapping: `ARM_AWAY` always, plus `ARM_HOME` and `ARM_NIGHT` when mapped.
 
 **Arm (mode M)**
-1. If any *other* profile is not `disarmed`, disarm it first. This keeps behaviour defined whichever way §3 item 5 turns out.
+1. If any *other* profile is not `disarmed`, disarm it first. This keeps behaviour defined whichever way §3 item 3 turns out.
 2. Arm the mapped profile.
 3. If the mapped profile is missing, raise `HomeAssistantError` (translation key `profile_missing`).
 
@@ -232,7 +243,7 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 
 **`async_step_user`**
 - Fields: host, username, password, and "Verify SSL certificate" (default off).
-- Validation runs login, then the unique-ID probe (§3 item 1), then `GET /profiles`.
+- Validation runs login, then `GET /proxy/protect/api/nvr` (console info and Global-mode flag), then `GET /profiles`.
 
 | Result | Error key |
 |---|---|
@@ -241,7 +252,7 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 | 429 on login | `rate_limited` ("Too many failed logins; wait a few minutes") |
 | Network, TLS or timeout | `cannot_connect` |
 | 403 on profiles | `not_super_admin` |
-| Non-Global-mode shape | `global_mode_off` |
+| `useExternalAlarmManager` is false | `global_mode_off` |
 | Empty profile list | `no_profiles` |
 | Anything else | `unknown` (the exception is logged) |
 
@@ -418,12 +429,11 @@ README.md  CONTRIBUTING.md  LICENSE (MIT)  CLAUDE.md
 ## 11. Build order
 
 1. **Scaffold.** Create the directory structure, `manifest.json`, `hacs.json`, `.gitignore`, `pyproject.toml`, `LICENSE`, and a **minimal config flow stub with `translations/en.json` plus one smoke test**. Then add `validate.yml`, so that hassfest and pytest pass from the first commit and every commit after is checked.
-2. **Resolve §3 item 1 (unique ID) and item 2 (`lastUpdateId`)** against the real console, using read-only calls.
-3. **`api.py` and `websocket.py`**, with unit tests against recorded fixtures.
-4. **`coordinator.py`**, tested against mocked profile and websocket data.
-5. **The rest of the integration:** `config_flow.py` in full, then `alarm_control_panel.py`, `diagnostics.py` and `repairs.py`.
-6. **Real-console checks** via `scripts/develop` for the remaining §3 items. Ask before any arm or disarm test.
-7. **Docs and release:** README, CONTRIBUTING, brand icon, `release.yml`, CLAUDE.md.
+2. **`api.py` and `websocket.py`**, with unit tests against recorded fixtures.
+3. **`coordinator.py`**, tested against mocked profile and websocket data.
+4. **The rest of the integration:** `config_flow.py` in full, then `alarm_control_panel.py`, `diagnostics.py` and `repairs.py`.
+5. **Real-console checks** via `scripts/develop` for the remaining §3 items. Ask before any arm or disarm test.
+6. **Docs and release:** README, CONTRIBUTING, brand icon, `release.yml`, CLAUDE.md.
 
 ## 12. Out of scope (v1)
 
