@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -57,6 +58,29 @@ def async_delete_entry_issues(hass: HomeAssistant, entry_id: str) -> None:
     """Delete every repair issue this integration may have raised for an entry."""
     for key in ALL_ISSUES:
         ir.async_delete_issue(hass, DOMAIN, f"{key}_{entry_id}")
+
+
+def _derive_missing_promotion_due_at(profile: ArmProfile) -> ArmProfile:
+    """Fill in a missing promotion due time for an arming profile.
+
+    Protect's websocket profile payloads omit `state_promotion_due_at`
+    (verified live 2026-09-27), even though the REST arm response carries it.
+    Derive it from `state_set_at + activation_delay` so the entity attribute
+    and the promotion-refresh backstop both still see a due time.
+    """
+    if (
+        profile.state == STATE_ARMING
+        and profile.state_promotion_due_at is None
+        and profile.state_set_at is not None
+        and profile.activation_delay is not None
+        and profile.activation_delay > 0
+    ):
+        return replace(
+            profile,
+            state_promotion_due_at=profile.state_set_at
+            + timedelta(seconds=profile.activation_delay),
+        )
+    return profile
 
 
 class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
@@ -184,6 +208,7 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         """Apply a pushed or action-returned profile immediately."""
         if self._shutdown_requested:
             return  # a push arriving during unload must not start new timers
+        profile = _derive_missing_promotion_due_at(profile)
         self._write_seq += 1
         self._written_seq[profile.id] = self._write_seq
         data = dict(self.data or {})

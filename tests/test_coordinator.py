@@ -268,6 +268,63 @@ async def test_push_unavailable_issue_lifecycle(hass, coordinator, freezer) -> N
     assert _issue(hass, coordinator, ISSUE_PUSH_UNAVAILABLE) is None
 
 
+async def test_handle_profile_derives_missing_promotion_due_time(coordinator) -> None:
+    """The websocket omits state_promotion_due_at on arming pushes; derive it."""
+    await coordinator.async_refresh()
+    profile = make_profile(state="arming", activation_delay=60)
+    assert profile.state_promotion_due_at is None
+
+    coordinator.handle_profile(profile)
+
+    expected = profile.state_set_at + timedelta(seconds=60)
+    assert coordinator.data[AWAY_ID].state_promotion_due_at == expected
+    assert coordinator._promotion_unsub is not None
+
+
+async def test_handle_profile_keeps_an_explicit_promotion_due_time(
+    coordinator,
+) -> None:
+    await coordinator.async_refresh()
+    due = dt_util.utcnow() + timedelta(seconds=45)
+    profile = make_profile(state="arming", promotion_due=due)
+
+    coordinator.handle_profile(profile)
+
+    assert coordinator.data[AWAY_ID].state_promotion_due_at == due
+
+
+async def test_handle_profile_without_activation_delay_derives_nothing(
+    coordinator,
+) -> None:
+    await coordinator.async_refresh()
+    profile = make_profile(state="arming", activation_delay=None)
+
+    coordinator.handle_profile(profile)
+
+    assert coordinator.data[AWAY_ID].state_promotion_due_at is None
+    assert coordinator._promotion_unsub is None
+
+
+async def test_websocket_push_after_arm_response_keeps_derived_due_time(
+    coordinator, client
+) -> None:
+    """Mirrors the console: the REST arm response carries a due time, and the
+    websocket push for the same change arrives 29 ms later without one."""
+    await coordinator.async_refresh()
+    client.async_arm.return_value = make_profile(
+        state="arming", promotion_due=dt_util.utcnow() + timedelta(seconds=60)
+    )
+    await coordinator.async_arm_profile(AWAY_ID)
+    assert coordinator.data[AWAY_ID].state_promotion_due_at is not None
+
+    pushed = make_profile(state="arming", activation_delay=60)
+    coordinator.handle_profile(pushed)
+
+    expected = pushed.state_set_at + timedelta(seconds=60)
+    assert coordinator.data[AWAY_ID].state_promotion_due_at == expected
+    assert coordinator._promotion_unsub is not None
+
+
 async def test_promotion_refresh_fires_when_the_exit_delay_ends(
     hass, coordinator, client
 ) -> None:
