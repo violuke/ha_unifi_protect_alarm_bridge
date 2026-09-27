@@ -79,7 +79,7 @@ All requests go to `https://<host>`. Consoles use self-signed certificates.
 ### Resolved during planning
 - **Unique ID:** `nvr.mac`, as above.
 - **`lastUpdateId`:** `ws/updates` connects and streams without it (verified), so bootstrap is never fetched.
-- **Global mode off:** detected with `featureFlags.useExternalAlarmManager == false` rather than by guessing at the shape of `/profiles`.
+- **Global mode off:** detected with `featureFlags.useExternalAlarmManager == false` rather than by guessing at the shape of `/profiles`. A missing or non-boolean flag is treated as unknown, not as "off", so firmware drift surfaces as `api_changed` instead of blocking setup.
 
 ### Verified on the real console (2026-09-27)
 - Setup with a local Super Admin account.
@@ -180,7 +180,7 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 **Promotion refresh**
 - While any profile is `arming`, the coordinator schedules one refresh with `async_call_later`.
   - The delay is `max(due − now, 0) + 2 s`, with a minimum of 5 s.
-  - The callback is registered through `entry.async_on_unload`.
+  - The timer is cancelled by the coordinator's `async_shutdown()`, which HA calls on unload and reload.
   - New data for that profile cancels and reschedules it.
 - If three refreshes in a row still show `arming` past its due time (for example because of clock skew), the coordinator stops scheduling for that profile and relies on normal polling.
 
