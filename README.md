@@ -69,6 +69,9 @@ You can change the mapping later under the integration's **Configure** button.
 - **Arming from the Protect app, a schedule or a fob shows up within about a
   second.** If a profile you haven't mapped is armed, the panel shows
   `armed_custom_bypass`, and its `profile_title` attribute names the profile.
+- **If the official UniFi Protect integration is also installed, the alarm
+  panel appears on the same console device** (both integrations identify it
+  by its MAC address).
 
 ## Troubleshooting
 
