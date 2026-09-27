@@ -234,3 +234,17 @@ async def test_disarm_all_reports_partial_failure(hass, mock_client) -> None:
     assert err.value.translation_placeholders["profile"] == "Away"
     assert mock_client.async_disarm.await_count == 2
     assert entry.runtime_data.data[HOME_ID].state == "disarmed"
+
+
+async def test_severity_tie_prefers_the_mapped_profile(hass, mock_client) -> None:
+    # AWAY_ID sorts before HOME_ID, but only HOME is mapped, so this only passes
+    # if "mapped beats unmapped" outranks the id tie-break.
+    mock_client.async_get_profiles.return_value = [
+        make_profile(state="armed"),
+        make_profile(profile_id=HOME_ID, state="armed"),
+    ]
+    await setup_entry(
+        hass,
+        mock_config_entry({CONF_PROFILE_AWAY: OTHER_ID, CONF_PROFILE_HOME: HOME_ID}),
+    )
+    assert hass.states.get(ENTITY_ID).state == "armed_home"
