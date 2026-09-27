@@ -327,7 +327,7 @@ README.md  CONTRIBUTING.md  LICENSE (MIT)  CLAUDE.md
 **`manifest.json`**
 - `domain`, `name`, `config_flow: true`, `iot_class: local_push`, `integration_type: hub`
 - `requirements: []`, because aiohttp ships with HA
-- `version: 0.1.0`, `codeowners: ["@violuke"]`
+- `version: 1.0.0`, `codeowners: ["@violuke"]`
 - `documentation` and `issue_tracker` URLs
 
 **`hacs.json`**
@@ -401,11 +401,11 @@ README.md  CONTRIBUTING.md  LICENSE (MIT)  CLAUDE.md
 3. Creates a GitHub Release with the zip attached.
 4. Marks tags with a pre-release suffix (e.g. `v0.1.0-beta1`) as a **pre-release**.
 
-**Pre-release visibility.** HACS hides pre-releases by default. While the only release is a pre-release, the README tells testers to enable "Show beta versions" for this repository in HACS. The maintainer decides later when to cut a normal release.
+**Pre-release visibility.** HACS hides pre-releases by default, so users only see `-suffix` tags after enabling "Show beta versions" for this repository in HACS.
 
 **Branching:** `main` plus feature branches. PRs are gated by `validate`.
 
-**Tags and releases:** none are created until the maintainer explicitly asks. The first will be `v0.1.0-beta1`, as a pre-release.
+**Tags and releases:** none are created until the maintainer explicitly asks. The first release is `v1.0.0`, a normal (non-pre-release) release, at the maintainer's request.
 
 ## 10. Documentation
 
@@ -416,7 +416,7 @@ README.md  CONTRIBUTING.md  LICENSE (MIT)  CLAUDE.md
 - **Security note:**
   - The credentials are stored in plaintext in HA's `.storage`.
   - A Super Admin account controls the whole console: network, cameras and users. This is why the account should be dedicated, local-only and unused for anything else.
-- **Install:** HACS custom repository, plus the beta-visibility note.
+- **Install:** HACS custom repository.
 - **Setup:** a config flow walkthrough.
 - **Troubleshooting:**
   - Entity unavailable → network or credentials; check Repairs.

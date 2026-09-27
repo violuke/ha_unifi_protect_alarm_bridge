@@ -44,9 +44,7 @@ It runs alongside the official UniFi Protect integration and doesn't depend on i
 1. In HACS, open **⋮ → Custom repositories**. Add
    `https://github.com/violuke/ha_unifi_protect_alarm_bridge` with the category
    **Integration**.
-2. While only beta versions exist, open the repository in HACS, choose
-   **⋮ → Redownload**, and enable **Show beta versions**.
-3. Download it, then restart Home Assistant.
+2. Download it, then restart Home Assistant.
 
 ## Setup
 
