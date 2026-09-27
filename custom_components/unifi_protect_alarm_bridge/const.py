@@ -47,7 +47,8 @@ ISSUE_TRACKER_URL: Final = (
 )
 
 # Keys removed from diagnostics and from logged API payloads. Profile titles and
-# console names can contain people's names or addresses.
+# console names can contain people's names or addresses. Session tokens and
+# cookies are also removed.
 REDACT_KEYS: Final = {
     CONF_HOST,
     CONF_USERNAME,
@@ -55,4 +56,12 @@ REDACT_KEYS: Final = {
     "title",
     "profile_title",
     "name",
+    "csrf_token",
+    "csrfToken",
+    "x-csrf-token",
+    "X-CSRF-Token",
+    "TOKEN",
+    "token",
+    "cookie",
+    "Cookie",
 }

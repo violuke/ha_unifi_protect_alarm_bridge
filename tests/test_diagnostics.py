@@ -14,13 +14,28 @@ async def test_diagnostics_are_redacted(hass, mock_client) -> None:
     entry = mock_config_entry()
     await setup_entry(hass, entry)
     entry.runtime_data.last_unexpected_payload = [
-        {"id": AWAY_ID, "title": "Jane's house", "state": "odd"}
+        {
+            "id": AWAY_ID,
+            "title": "Jane's house",
+            "state": "odd",
+            "csrfToken": "csrf-secret-value",
+            "TOKEN": "token-secret-value",
+        }
     ]
 
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
 
     dumped = json.dumps(diagnostics)
-    for secret in (HOST, USERNAME, PASSWORD, "Test Console", "Jane's house", '"Away"'):
+    for secret in (
+        HOST,
+        USERNAME,
+        PASSWORD,
+        "Test Console",
+        "Jane's house",
+        '"Away"',
+        "csrf-secret-value",
+        "token-secret-value",
+    ):
         assert secret not in dumped
     assert diagnostics["profiles"][AWAY_ID]["state"] == "disarmed"
     assert diagnostics["console"]["protect_version"] == "7.2.105"
