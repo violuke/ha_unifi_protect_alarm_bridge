@@ -129,8 +129,9 @@ class ProtectUpdatesListener:
             except Exception:
                 # A bug (ours or a callback's) must not end instant updates for good.
                 _LOGGER.exception("Unexpected error in the Protect update socket")
+            was_connected = self.connected
             self._set_connected(False)
-            if established:
+            if established or was_connected:
                 backoff = self._backoff_initial
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, self._backoff_max)
@@ -165,13 +166,13 @@ class ProtectUpdatesListener:
 
     async def _close(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
-        # Work around an aiohttp quirk: when *we* initiate the close, the
-        # peer's close-handshake byte can arrive a tick after ws.close()
-        # already cancelled the heartbeat, and aiohttp's _on_data_received()
-        # re-arms it without checking that the socket is closed. Left alone,
-        # that phantom `_send_heartbeat` timer keeps the closed connection
-        # alive until it eventually fires. Yield once so any pending reset
-        # lands, then cancel it.
+        # Work around an aiohttp quirk (aiohttp 3.14.x): when *we* initiate the
+        # close, the peer's close-handshake byte can arrive a tick after
+        # ws.close() already cancelled the heartbeat, and aiohttp's
+        # _on_data_received() re-arms it without checking that the socket is
+        # closed. Left alone, that phantom `_send_heartbeat` timer keeps the
+        # closed connection alive until it eventually fires. Yield once so any
+        # pending reset lands, then cancel it. Revisit on aiohttp upgrade.
         await asyncio.sleep(0)
         heartbeat_cb = getattr(ws, "_heartbeat_cb", None)
         if heartbeat_cb is not None:

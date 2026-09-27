@@ -12,6 +12,7 @@ import pytest
 
 from custom_components.unifi_protect_alarm_bridge.api import (
     ArmProfile,
+    CannotConnect,
     UniFiAlarmClient,
 )
 from custom_components.unifi_protect_alarm_bridge.websocket import (
@@ -232,6 +233,45 @@ async def test_callback_error_does_not_kill_the_listener(
     await wait_until(lambda: recorder.connection == [True, False, True])
     assert calls == 1
     assert not task.done()
+
+
+async def test_backoff_resets_after_an_established_connection_ends_by_exception(
+    api_client, fake_console, start_listener
+) -> None:
+    """A callback exception ends the connection via the `except Exception` path.
+
+    `established` is only True when `_connect_and_listen` returns normally, so
+    this path must reset the backoff itself instead of relying on that.
+    """
+    listener, recorder, _ = start_listener(
+        api_client, backoff_initial=0.01, backoff_max=10.0
+    )
+    real_connect_and_listen = listener._connect_and_listen
+    remaining_failures = 6
+
+    async def flaky_connect_and_listen() -> bool:
+        nonlocal remaining_failures
+        if remaining_failures > 0:
+            remaining_failures -= 1
+            raise CannotConnect("simulated failure to grow the backoff")
+        listener._connect_and_listen = real_connect_and_listen
+        return await real_connect_and_listen()
+
+    listener._connect_and_listen = flaky_connect_and_listen
+
+    # Six failed connects grow the backoff to backoff_initial * 2**6 = 0.64s.
+    await wait_until(lambda: recorder.connection == [True])
+
+    def exploding_on_profile(profile: ArmProfile) -> None:
+        raise RuntimeError("bug in a callback")
+
+    listener._on_profile = exploding_on_profile
+    await fake_console.ws_queue.put(profile_packet(profile_json(state="armed")))
+    await wait_until(lambda: recorder.connection == [True, False])
+
+    # A reset backoff reconnects almost immediately. An unreset backoff would
+    # still be sleeping off the grown 0.64s delay well past this limit.
+    await wait_until(lambda: recorder.connection == [True, False, True], limit=0.3)
 
 
 async def test_logs_in_again_when_handshake_is_unauthorised(
