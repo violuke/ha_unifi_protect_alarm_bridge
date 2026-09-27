@@ -101,7 +101,7 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 **Session**
 - A dedicated session: `async_create_clientsession(hass, verify_ssl=<option>, cookie_jar=aiohttp.CookieJar(unsafe=True))`.
   - It is not HA's shared session, so its cookies stay isolated.
-  - It uses the default `auto_cleanup=True`. When the session is created during `async_setup_entry`, HA registers `config_entry.async_on_unload` to close it (verified in HA 2025.11 source), so reloads don't leak sessions. The config flow's short-lived validation session uses `auto_cleanup=False` and is closed in a `finally` block.
+  - It uses the default `auto_cleanup=True`. When the session is created during `async_setup_entry`, HA registers `config_entry.async_on_unload` to close it (verified in HA 2025.11 and 2026.9 source), so reloads don't leak sessions. The config flow's short-lived validation session uses `auto_cleanup=False` and is closed in a `finally` block.
 - `verify_ssl` defaults to off.
 
 **Methods**
@@ -323,14 +323,14 @@ README.md  CONTRIBUTING.md  LICENSE (MIT)  CLAUDE.md
 - `documentation` and `issue_tracker` URLs
 
 **`hacs.json`**
-- `name`, `render_readme: true`, `homeassistant: "2025.11.0"`, `zip_release: true`, `filename: "unifi_protect_alarm_bridge.zip"`.
+- `name`, `render_readme: true`, `homeassistant: "2026.9.0"`, `zip_release: true`, `filename: "unifi_protect_alarm_bridge.zip"`.
 
 **Local `brand/` folder**
 - If the running HA version does not read it, the icon is simply missing, which is harmless.
 - If `hacs/action`'s brands check rejects a repo that is not in home-assistant/brands, set `ignore: brands` in `validate.yml` and note why.
 
 **Platform**
-- Minimum HA 2025.11 and Python 3.13.
+- Minimum HA 2026.9 and Python 3.14. Older releases are not supported.
 - Uses `entry.runtime_data`, the `AlarmControlPanelState` enum and a typed `ConfigEntry`.
 
 **`.gitignore`**
@@ -341,7 +341,7 @@ README.md  CONTRIBUTING.md  LICENSE (MIT)  CLAUDE.md
 
 ## 8. Testing
 
-**Framework:** `pytest-homeassistant-custom-component`, pinned to the release that matches HA 2025.11.
+**Framework:** `pytest-homeassistant-custom-component`, pinned to `0.13.367` (HA 2026.9.4).
 
 **Fixtures**
 - Sanitised copies of the real payloads: profiles, arm/disarm responses, and `externalArmProfile` frames.

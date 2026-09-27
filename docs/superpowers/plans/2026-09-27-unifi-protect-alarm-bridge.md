@@ -11,13 +11,13 @@
 - `alarm_control_panel.py` maps the highest-severity profile to an HA alarm state.
 - Everything user-facing goes through the config, options and repairs flows, with translations.
 
-**Tech Stack:** Python 3.13/3.14, Home Assistant ≥ 2025.11, aiohttp (bundled with HA), pytest-homeassistant-custom-component, ruff, GitHub Actions (hassfest, hacs/action).
+**Tech Stack:** Python 3.14, Home Assistant ≥ 2026.9, aiohttp (bundled with HA), pytest-homeassistant-custom-component, ruff, GitHub Actions (hassfest, hacs/action).
 
 **Spec:** `docs/superpowers/specs/2026-09-27-unifi-protect-alarm-bridge-design.md`. Read it before starting; the plan argues from it.
 
 ## Global Constraints
 
-- Domain `unifi_protect_alarm_bridge`; minimum Home Assistant `2025.11.0`; Python 3.13 (min) and 3.14 (current HA).
+- Domain `unifi_protect_alarm_bridge`; minimum Home Assistant `2026.9.0`; Python 3.14. Older HA releases are not supported; don't add compatibility shims for them.
 - `manifest.json`: `iot_class: local_push`, `integration_type: hub`, `requirements: []`, `version: 0.1.0`, `codeowners: ["@violuke"]`.
 - Never import `uiprotect` or the official `unifiprotect` integration.
 - License: MIT.
@@ -69,7 +69,7 @@ tests/
   test_init.py  test_alarm_control_panel.py  test_diagnostics.py  test_repairs.py
 scripts/develop            local HA with the integration symlinked in
 config/configuration.yaml  dev HA config (everything else in config/ is gitignored)
-hacs.json  pyproject.toml  requirements_test.txt  requirements_test_min.txt
+hacs.json  pyproject.toml  requirements_test.txt
 .github/workflows/validate.yml  .github/workflows/release.yml
 .gitignore  LICENSE  README.md  CONTRIBUTING.md  CLAUDE.md
 ```
@@ -80,7 +80,7 @@ hacs.json  pyproject.toml  requirements_test.txt  requirements_test_min.txt
 
 **Files:**
 - Create: `custom_components/unifi_protect_alarm_bridge/{__init__.py,manifest.json,const.py,config_flow.py,translations/en.json}`
-- Create: `hacs.json`, `pyproject.toml`, `requirements_test.txt`, `requirements_test_min.txt`, `LICENSE`, `.github/workflows/validate.yml`
+- Create: `hacs.json`, `pyproject.toml`, `requirements_test.txt`, `LICENSE`, `.github/workflows/validate.yml`
 - Modify: `.gitignore`
 - Test: `tests/__init__.py`, `tests/conftest.py`, `tests/test_smoke.py`
 
@@ -88,25 +88,18 @@ hacs.json  pyproject.toml  requirements_test.txt  requirements_test_min.txt
 - Consumes: nothing.
 - Produces: every constant in `const.py` (used by all later tasks), the complete `translations/en.json`, and a stub `UniFiAlarmConfigFlow` that Task 4 replaces.
 
-- [ ] **Step 1: Create the local test environments**
+- [ ] **Step 1: Create the local test environment**
 
 ```bash
 cd /Users/lukecousins/orca/ha_unifi_protect_alarm_bridge
 cat > requirements_test.txt <<'EOF'
-# Current Home Assistant (2026.9.4) - Python 3.14
+# Home Assistant 2026.9.4 (the minimum supported release) - Python 3.14
 pytest-homeassistant-custom-component==0.13.367
 ruff==0.16.9
 EOF
-cat > requirements_test_min.txt <<'EOF'
-# Minimum supported Home Assistant (2025.11.3) - Python 3.13
-pytest-homeassistant-custom-component==0.13.297
-# HA 2025.11 does not constrain pycares, and pycares 5.x breaks the aiodns it pins.
-pycares<5
-EOF
 uv venv .venv -p 3.14 && uv pip install --python .venv -r requirements_test.txt
-uv venv .venv-min -p 3.13 && uv pip install --python .venv-min -r requirements_test_min.txt
 ```
-Expected: both installs succeed. `.venv/bin/python -c "import homeassistant.const as c; print(c.__version__)"` prints `2026.9.4`.
+Expected: the install succeeds. `.venv/bin/python -c "import homeassistant.const as c; print(c.__version__)"` prints `2026.9.4`.
 
 - [ ] **Step 2: Replace `.gitignore`**
 
@@ -144,7 +137,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 88
 
 [tool.ruff.lint]
@@ -456,10 +449,10 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
 }
 ```
 
-- [ ] **Step 7: Run the smoke test on both HA versions**
+- [ ] **Step 7: Run the smoke test**
 
-Run: `.venv/bin/pytest -v && .venv-min/bin/pytest -v`
-Expected: `1 passed` on each.
+Run: `.venv/bin/pytest -v`
+Expected: `1 passed`.
 
 - [ ] **Step 8: Add HACS metadata, the license, and the CI workflow**
 
@@ -468,7 +461,7 @@ Expected: `1 passed` on each.
 {
   "name": "UniFi Protect Alarm Bridge",
   "content_in_root": false,
-  "homeassistant": "2025.11.0",
+  "homeassistant": "2026.9.0",
   "render_readme": true,
   "zip_release": true,
   "filename": "unifi_protect_alarm_bridge.zip"
@@ -541,24 +534,13 @@ jobs:
       - run: ruff format --check .
 
   tests:
-    name: tests (HA ${{ matrix.ha }})
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - ha: "2025.11 (minimum)"
-            python: "3.13"
-            requirements: requirements_test_min.txt
-          - ha: "2026.9 (current)"
-            python: "3.14"
-            requirements: requirements_test.txt
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python }}
-      - run: pip install -r ${{ matrix.requirements }}
+          python-version: "3.14"
+      - run: pip install -r requirements_test.txt
       - run: pytest
 ```
 
@@ -566,7 +548,7 @@ jobs:
 
 ```bash
 .venv/bin/ruff check --fix . && .venv/bin/ruff format . && .venv/bin/pytest -q
-git add .gitignore pyproject.toml requirements_test.txt requirements_test_min.txt hacs.json LICENSE \
+git add .gitignore pyproject.toml requirements_test.txt hacs.json LICENSE \
   .github/workflows/validate.yml custom_components tests
 git commit -m "chore: scaffold integration, packaging and CI
 
@@ -581,7 +563,7 @@ Ask the maintainer:
 
 Only on a yes: `git push -u origin feature/initial-integration`, then `gh run watch --exit-status`.
 
-Expected: hassfest, hacs, lint and both test jobs pass. If `hacs` fails only on `description`/`topics` because the maintainer declined step 2, report that; don't add those checks to `ignore`.
+Expected: the hassfest, hacs, lint and tests jobs all pass. If `hacs` fails only on `description`/`topics` because the maintainer declined step 2, report that; don't add those checks to `ignore`.
 
 ---
 
@@ -1501,10 +1483,10 @@ class UniFiAlarmClient:
 Run: `.venv/bin/pytest tests/test_api.py -v`
 Expected: all tests PASS.
 
-- [ ] **Step 7: Run everything on both HA versions, lint, and commit**
+- [ ] **Step 7: Run everything, lint, and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add custom_components tests
 git commit -m "feat: add Alarm Manager API client with typed errors
@@ -1980,10 +1962,10 @@ class ProtectUpdatesListener:
 Run: `.venv/bin/pytest tests/test_websocket.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Run everything on both HA versions, lint, and commit**
+- [ ] **Step 5: Run everything, lint, and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add custom_components tests
 git commit -m "feat: add Protect update websocket listener
@@ -2594,10 +2576,10 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
 Run: `.venv/bin/pytest tests/test_config_flow.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Run everything on both HA versions, lint, and commit**
+- [ ] **Step 5: Run everything, lint, and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add -A custom_components tests
 git commit -m "feat: add config flow with Super Admin validation, reauth and reconfigure
@@ -3310,10 +3292,10 @@ Expected: all PASS.
 
 If `test_promotion_refresh_gives_up_if_the_console_never_promotes` counts one poll too many or too few, print `client.async_get_profiles.await_count` after each loop step. Check against the rule: each firing while overdue increments the count once, and scheduling stops at `PROMOTION_MAX_OVERDUE`. Fix the code, not the assertion.
 
-- [ ] **Step 5: Run everything on both HA versions, lint, and commit**
+- [ ] **Step 5: Run everything, lint, and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add custom_components tests
 git commit -m "feat: add coordinator with push/poll merge, promotion refresh and repairs
@@ -3731,10 +3713,10 @@ Expected: PASS, except these two, which need the entity from Task 7 and fail wit
 
 Mark those two tests `@pytest.mark.skip(reason="entity lands in Task 7")` now. Task 7 Step 5 removes the marks.
 
-- [ ] **Step 6: Run everything on both HA versions, lint, and commit**
+- [ ] **Step 6: Run everything, lint, and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add custom_components tests
 git commit -m "feat: set up coordinator per entry and add options flow
@@ -4207,10 +4189,10 @@ Delete the two `@pytest.mark.skip(reason="entity lands in Task 7")` lines from `
 Run: `.venv/bin/pytest tests/test_init.py tests/test_options_flow.py -v`
 Expected: all PASS.
 
-- [ ] **Step 6: Run everything on both HA versions, lint, and commit**
+- [ ] **Step 6: Run everything, lint, and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add custom_components tests
 git commit -m "feat: add alarm control panel entity
@@ -4300,6 +4282,8 @@ async def _start(hass, issue_id: str, data):
     flow.hass = hass
     flow.flow_id = "test-flow"
     flow.handler = DOMAIN
+    flow.issue_id = issue_id
+    flow.data = data
     flow.context = {}
     return flow
 
@@ -4413,10 +4397,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
+from homeassistant.components.repairs import (
+    ConfirmRepairFlow,
+    RepairsFlow,
+    RepairsFlowResult,
+)
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
 
 from .config_flow import mapping_from_input, profiles_schema, validate_mapping
 from .const import ISSUE_PROFILE_MISSING
@@ -4431,7 +4418,7 @@ class ProfileMissingRepairFlow(RepairsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> RepairsFlowResult:
         """Show the mapping form, then save it and reload the entry."""
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         if entry is None or entry.state is not ConfigEntryState.LOADED:
@@ -4471,10 +4458,10 @@ Expected: all PASS.
 
 If `test_profile_missing_fix_flow`'s last assertion fails because the issue still exists, the reload hasn't finished. Add a second `await hass.async_block_till_done()`. Don't remove the assertion: it proves the issue clears itself once the mapping is valid.
 
-- [ ] **Step 5: Run everything on both HA versions, lint, and commit**
+- [ ] **Step 5: Run everything, lint, and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add custom_components tests
 git commit -m "feat: add diagnostics and profile_missing repair flow
@@ -4723,14 +4710,12 @@ MIT
 
 ## Tests
 
-Two environments cover the minimum and current Home Assistant versions:
+The integration supports Home Assistant 2026.9 and later, on Python 3.14:
 
 ```bash
 uv venv .venv -p 3.14 && uv pip install --python .venv -r requirements_test.txt
-uv venv .venv-min -p 3.13 && uv pip install --python .venv-min -r requirements_test_min.txt
 
-.venv/bin/pytest                    # HA 2026.9 (current)
-.venv-min/bin/pytest                # HA 2025.11 (minimum)
+.venv/bin/pytest
 .venv/bin/pytest tests/test_api.py::test_expired_session_logs_in_again_once -v   # one test
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
@@ -4746,7 +4731,7 @@ values only: see `tests/helpers.py`.
 - hassfest
 - HACS validation
 - ruff
-- pytest on both Home Assistant versions
+- pytest
 
 Pull requests must pass all of them.
 
@@ -4786,11 +4771,9 @@ A HACS custom integration (`custom_components/unifi_protect_alarm_bridge`) that 
 ## Commands
 
 ```bash
-uv venv .venv -p 3.14 && uv pip install --python .venv -r requirements_test.txt          # current HA
-uv venv .venv-min -p 3.13 && uv pip install --python .venv-min -r requirements_test_min.txt  # minimum HA 2025.11
+uv venv .venv -p 3.14 && uv pip install --python .venv -r requirements_test.txt   # HA 2026.9 (minimum supported)
 .venv/bin/pytest                       # all tests
 .venv/bin/pytest tests/test_api.py::test_concurrent_expiry_logs_in_once -v   # one test
-.venv-min/bin/pytest                   # same suite on the minimum HA
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 scripts/develop                        # local HA with the integration, for real-console testing
 ```
@@ -4839,7 +4822,7 @@ scripts/develop                        # local HA with the integration, for real
 - [ ] **Step 7: Validate and commit**
 
 ```bash
-.venv/bin/pytest -q && .venv-min/bin/pytest -q
+.venv/bin/pytest -q
 .venv/bin/ruff check --fix . && .venv/bin/ruff format .
 git add -A custom_components .github scripts config/configuration.yaml README.md CONTRIBUTING.md CLAUDE.md
 git status --short   # config/ must show only configuration.yaml; no .env, no .har
