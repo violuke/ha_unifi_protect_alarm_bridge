@@ -84,7 +84,7 @@ All requests go to `https://<host>`. Consoles use self-signed certificates.
 1. **The `breached` payload.** It is deliberately not triggered on a live system, and is assumed to follow the UI enum.
 2. **Arming with activation delay off.** The expected response is `armed` immediately.
 3. **Arming profile B while profile A is armed.** Protect may reject the request, switch profiles, or allow both. The test console has one profile, so this may stay unverified; the entity behaviour in §4 is safe in all three cases.
-4. **MFA challenge response shape.** UniFi OS is believed to return HTTP 499 with `MFA_AUTH_REQUIRED`. Until it is verified, detection matches that shape, and anything else falls through to `invalid_auth`.
+4. **MFA challenge response shape.** UniFi OS is believed to return HTTP 499 with `MFA_AUTH_REQUIRED`. Until it is verified, detection matches HTTP 499. Any other unrecognised login status raises `UnexpectedResponse`, which the config flow reports as `unknown`.
 5. **Login rate limiting.** UniFi OS is believed to return 429 (`AUTHENTICATION_FAILED_LIMIT_REACHED`). It is handled as a transient error either way.
 
 ## 4. Architecture
@@ -101,7 +101,7 @@ alarm_control_panel.py  ──reads──▶  coordinator.py  ◀──push─�
 **Session**
 - A dedicated session: `async_create_clientsession(hass, verify_ssl=<option>, cookie_jar=aiohttp.CookieJar(unsafe=True))`.
   - It is not HA's shared session, so its cookies stay isolated.
-  - It uses the default `auto_cleanup=True`. When the session is created during `async_setup_entry`, HA registers `config_entry.async_on_unload` to close it (verified in HA 2025.11 and 2026.9 source), so reloads don't leak sessions. The config flow's short-lived validation session uses `auto_cleanup=False` and is closed in a `finally` block.
+  - It uses the default `auto_cleanup=True`. When the session is created during `async_setup_entry`, HA registers `config_entry.async_on_unload` to close it (verified in HA 2025.11 and 2026.9 source), so reloads don't leak sessions. The config flow's short-lived validation session uses `auto_cleanup=False` and is released with `session.detach()` in a `finally` block. HA replaces `close()` on its sessions with a warning, so `close()` must not be used.
 - `verify_ssl` defaults to off.
 
 **Methods**

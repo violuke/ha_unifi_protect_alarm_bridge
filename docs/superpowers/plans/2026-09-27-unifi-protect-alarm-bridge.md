@@ -371,6 +371,7 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
     },
     "abort": {
       "already_configured": "This console is already configured.",
+      "already_in_progress": "Setup for this console is already in progress.",
       "reauth_successful": "Re-authentication was successful.",
       "reconfigure_successful": "Reconfiguration was successful.",
       "unique_id_mismatch": "These details belong to a different console than the one originally configured."
@@ -584,7 +585,7 @@ Expected: the hassfest, hacs, lint and tests jobs all pass. If `hacs` fails only
     - `ArmProfile.from_api(data: Any) -> ArmProfile`
     - `ArmProfile.as_dict() -> dict[str, Any]`, which gives ISO strings for the datetimes.
   - `@dataclass(frozen=True, slots=True) ConsoleInfo`:
-    - Fields: `mac: str`, `name: str`, `model: str | None`, `protect_version: str | None`, `external_alarm_manager: bool`.
+    - Fields: `mac: str`, `name: str`, `model: str | None`, `protect_version: str | None`, `firmware_version: str | None` (UniFi OS), `external_alarm_manager: bool`.
     - `ConsoleInfo.from_api(data: Any)`.
   - `UniFiAlarmClient(session: aiohttp.ClientSession, host: str, username: str, password: str, *, scheme: str = "https")`:
     - Properties: `session`, `csrf_token: str | None`, `generation: int`.
@@ -1016,6 +1017,7 @@ async def test_console_info(api_client) -> None:
         name="Test Console",
         model="UDM-PRO",
         protect_version="7.2.105",
+        firmware_version="5.1.33",
         external_alarm_manager=True,
     )
 
@@ -1294,6 +1296,7 @@ class ConsoleInfo:
     name: str
     model: str | None
     protect_version: str | None
+    firmware_version: str | None
     external_alarm_manager: bool
 
     @classmethod
@@ -1307,11 +1310,13 @@ class ConsoleInfo:
         flags = data.get("featureFlags")
         flags = flags if isinstance(flags, dict) else {}
         model, version = data.get("type"), data.get("version")
+        firmware = data.get("firmwareVersion")
         return cls(
             mac=mac,
             name=name,
             model=model if isinstance(model, str) else None,
             protect_version=version if isinstance(version, str) else None,
+            firmware_version=firmware if isinstance(firmware, str) else None,
             external_alarm_manager=flags.get("useExternalAlarmManager") is True,
         )
 
@@ -1503,7 +1508,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Test: `tests/test_websocket.py`
 
 **Interfaces:**
-- Consumes (from Task 2): `UniFiAlarmClient`, which provides `.session`, `.csrf_token`, `.generation`, `.ws_url()` and `.async_login(stale_generation=...)`. Also `ArmProfile.from_api`, and the errors `AuthFailed`, `CannotConnect`, `RateLimited` and `UnexpectedResponse`.
+- Consumes (from Task 2): `UniFiAlarmClient`, which provides `.session`, `.csrf_token`, `.generation`, `.ws_url()` and `.async_login(stale_generation=...)`. Also `ArmProfile.from_api`, and the errors `AuthFailed`, `MfaRequired`, `CannotConnect`, `RateLimited` and `UnexpectedResponse`.
 - Produces:
   - `PacketDecodeError(ValueError)`
   - `decode_packet(data: bytes) -> list[Any]`
@@ -1585,9 +1590,9 @@ class Recorder:
         self.auth_failed += 1
 
 
-async def wait_until(predicate: Callable[[], bool], timeout: float = 5) -> None:
-    async with asyncio.timeout(timeout):
-        while not predicate():
+async def wait_until(predicate: Callable[[], bool], limit: float = 5) -> None:
+    async with asyncio.timeout(limit):
+        while not predicate():  # noqa: ASYNC110 - polling test callbacks is intended
             await asyncio.sleep(0.01)
 
 
@@ -1685,12 +1690,61 @@ async def test_reconnects_after_server_closes(
 
 
 async def test_silent_socket_is_treated_as_dead(
-    api_client, fake_console, start_listener
+    api_client, fake_console, start_listener, caplog
 ) -> None:
     _, recorder, _ = start_listener(api_client, silence_timeout=0.2)
-    await wait_until(lambda: recorder.connection[:3] == [True, False, True])
+    await wait_until(lambda: recorder.connection.count(True) >= 3)
 
-    assert fake_console.ws_connections >= 2
+    assert fake_console.ws_connections >= 3
+    warnings = [r for r in caplog.records if "disconnected" in r.getMessage()]
+    assert len(warnings) == 1  # repeat silence drops are logged at debug only
+
+
+async def test_mfa_challenge_stops_the_listener(
+    api_client, fake_console, start_listener
+) -> None:
+    await api_client.async_login()
+    fake_console.expire_sessions()
+    fake_console.login_status = 499
+
+    _, recorder, task = start_listener(api_client)
+    await wait_until(task.done)
+
+    assert recorder.auth_failed == 1
+
+
+async def test_rate_limited_login_backs_off_and_retries(
+    api_client, fake_console, start_listener
+) -> None:
+    fake_console.login_status = 429
+    listener, recorder, task = start_listener(api_client)
+
+    await wait_until(lambda: listener.reconnect_count >= 2)
+    assert not task.done()
+    assert recorder.auth_failed == 0
+
+    fake_console.login_status = None
+    await wait_until(lambda: recorder.connection == [True])
+
+
+async def test_callback_error_does_not_kill_the_listener(
+    api_client, fake_console, start_listener
+) -> None:
+    listener, recorder, task = start_listener(api_client)
+    await wait_until(lambda: recorder.connection == [True])
+    calls = 0
+
+    def exploding_on_profile(profile: ArmProfile) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("bug in a callback")
+
+    listener._on_profile = exploding_on_profile
+    await fake_console.ws_queue.put(profile_packet(profile_json(state="armed")))
+
+    await wait_until(lambda: recorder.connection == [True, False, True])
+    assert calls == 1
+    assert not task.done()
 
 
 async def test_logs_in_again_when_handshake_is_unauthorised(
@@ -1760,6 +1814,7 @@ from .api import (
     ArmProfile,
     AuthFailed,
     CannotConnect,
+    MfaRequired,
     RateLimited,
     UnexpectedResponse,
     UniFiAlarmClient,
@@ -1840,6 +1895,7 @@ class ProtectUpdatesListener:
         self._backoff_initial = backoff_initial
         self._backoff_max = backoff_max
         self._warned = False
+        self._silence_drops = 0
         self.connected = False
         self.last_message_at: datetime | None = None
         self.reconnect_count = 0
@@ -1851,7 +1907,7 @@ class ProtectUpdatesListener:
             established = False
             try:
                 established = await self._connect_and_listen()
-            except AuthFailed:
+            except (AuthFailed, MfaRequired):
                 _LOGGER.error(
                     "Protect update socket stopped: the console rejected the "
                     "stored credentials"
@@ -1867,6 +1923,9 @@ class ProtectUpdatesListener:
                 TimeoutError,
             ) as err:
                 self._log_drop(f"{type(err).__name__}: {err}")
+            except Exception:
+                # A bug (ours or a callback's) must not end instant updates for good.
+                _LOGGER.exception("Unexpected error in the Protect update socket")
             self._set_connected(False)
             if established:
                 backoff = self._backoff_initial
@@ -1884,7 +1943,13 @@ class ProtectUpdatesListener:
                         ws.receive(), self._silence_timeout
                     )
                 except TimeoutError:
-                    self._log_drop(f"no messages for {self._silence_timeout:.0f}s")
+                    reason = f"no messages for {self._silence_timeout:.0f}s"
+                    if self._silence_drops:
+                        # Quiet sites hit this regularly; only the first is a warning.
+                        _LOGGER.debug("Protect update socket silent (%s)", reason)
+                    else:
+                        self._log_drop(reason)
+                    self._silence_drops += 1
                     return True
                 if message.type is aiohttp.WSMsgType.BINARY:
                     self.last_message_at = datetime.now(UTC)
@@ -2163,6 +2228,19 @@ async def test_user_step_errors_then_recovers(hass, flow_client, error, key) -> 
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
+async def test_failed_attempt_does_not_echo_the_password(hass, flow_client) -> None:
+    flow_client.async_get_profiles.side_effect = AuthFailed("x")
+    result = await _start_user_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+
+    suggested = {
+        str(key): (key.description or {}).get("suggested_value")
+        for key in result["data_schema"].schema
+    }
+    assert suggested[CONF_HOST] == HOST
+    assert suggested[CONF_PASSWORD] is None
+
+
 async def test_global_mode_off(hass, flow_client) -> None:
     flow_client.async_get_console_info.return_value = replace(
         CONSOLE, external_alarm_manager=False
@@ -2432,7 +2510,9 @@ async def async_validate_connection(
         LOGGER.exception("Unexpected error while validating %s", host)
         raise CannotValidate("unknown") from err
     finally:
-        await session.close()
+        # HA replaces close() on its sessions with a warning; detach() is the
+        # documented way to release a session created with auto_cleanup=False.
+        session.detach()
     if not profiles:
         raise CannotValidate("no_profiles")
     return console, profiles
@@ -2480,7 +2560,8 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(
-                STEP_USER_SCHEMA, user_input
+                STEP_USER_SCHEMA,
+                {k: v for k, v in (user_input or {}).items() if k != CONF_PASSWORD},
             ),
             errors=errors,
         )
@@ -2632,6 +2713,10 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+# Importing config_flow registers the reauth handler, as HA's integration preload
+# does at runtime. Without it, a poll's ConfigEntryAuthFailed can't start reauth
+# (async_start_reauth_if_available) when this file runs on its own.
+from custom_components.unifi_protect_alarm_bridge import config_flow  # noqa: F401
 from custom_components.unifi_protect_alarm_bridge.api import (
     AuthFailed,
     CannotConnect,
@@ -2940,6 +3025,17 @@ async def test_shutdown_cancels_the_promotion_timer(coordinator, client) -> None
     assert coordinator._promotion_unsub is None
 
 
+async def test_push_after_shutdown_is_ignored(coordinator) -> None:
+    await coordinator.async_refresh()
+    await coordinator.async_shutdown()
+
+    due = dt_util.utcnow() + timedelta(seconds=60)
+    coordinator.handle_profile(make_profile(state="arming", promotion_due=due))
+
+    assert coordinator.data[AWAY_ID].state == "disarmed"
+    assert coordinator._promotion_unsub is None
+
+
 async def test_delete_entry_issues(hass, coordinator, client) -> None:
     client.async_get_profiles.side_effect = InsufficientPermissions("x")
     await coordinator.async_refresh()
@@ -3136,6 +3232,8 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
     @callback
     def handle_profile(self, profile: ArmProfile) -> None:
         """Apply a pushed or action-returned profile immediately."""
+        if self._shutdown_requested:
+            return  # a push arriving during unload must not start new timers
         self._write_seq += 1
         self._written_seq[profile.id] = self._write_seq
         data = dict(self.data or {})
@@ -3160,6 +3258,8 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
     @callback
     def handle_resync(self) -> None:
         """Poll soon (debounced)."""
+        if self._shutdown_requested:
+            return
         self.config_entry.async_create_task(self.hass, self.async_request_refresh())
 
     @callback
@@ -3222,6 +3322,8 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
     def _schedule_promotion(self, profiles: dict[str, ArmProfile]) -> None:
         """Refresh once when the earliest exit delay should have ended."""
         self._cancel_promotion()
+        if self._shutdown_requested:
+            return
         due_times: list[datetime] = []
         for profile in profiles.values():
             if profile.state != STATE_ARMING or profile.state_promotion_due_at is None:
@@ -3414,10 +3516,14 @@ async def setup_entry(hass: HomeAssistant, entry: MockConfigEntry) -> None:
 ```python
 """Tests for setting up, unloading and removing the integration."""
 
+import asyncio
+from datetime import timedelta
+
 import pytest
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
 
 from custom_components.unifi_protect_alarm_bridge.api import (
     AuthFailed,
@@ -3446,6 +3552,37 @@ async def test_setup_unload(hass, mock_client, mock_listener_run) -> None:
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_unload_cancels_socket_task_and_timers(
+    hass, mock_client, mock_listener_run
+) -> None:
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def run_forever() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    mock_listener_run.side_effect = run_forever
+    due = dt_util.utcnow() + timedelta(seconds=60)
+    mock_client.async_get_profiles.return_value = [
+        make_profile(state="arming", promotion_due=due)
+    ]
+    entry = mock_config_entry()
+    await setup_entry(hass, entry)
+    await started.wait()
+    coordinator = entry.runtime_data
+    assert coordinator._promotion_unsub is not None
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert cancelled.is_set()
+    assert coordinator._promotion_unsub is None
 
 
 @pytest.mark.parametrize(
@@ -3892,6 +4029,7 @@ async def test_arm_with_no_exit_delay_is_immediately_armed(hass, mock_client) ->
 async def test_arm_again_while_active_is_a_no_op(hass, mock_client, state) -> None:
     mock_client.async_get_profiles.return_value = [make_profile(state=state)]
     await setup_entry(hass, mock_config_entry())
+    assert hass.states.get(ENTITY_ID) is not None  # else the call is a silent no-op
 
     await _call(hass, "alarm_arm_away")
 
@@ -3934,7 +4072,10 @@ async def test_arm_failure_raises(hass, mock_client) -> None:
 
 async def test_disarm_when_already_disarmed_is_a_no_op(hass, mock_client) -> None:
     await setup_entry(hass, mock_config_entry())
+    assert hass.states.get(ENTITY_ID).state == "disarmed"
+
     await _call(hass, "alarm_disarm")
+
     mock_client.async_disarm.assert_not_awaited()
 
 
@@ -4249,6 +4390,7 @@ async def test_diagnostics_are_redacted(hass, mock_client) -> None:
         assert secret not in dumped
     assert diagnostics["profiles"][AWAY_ID]["state"] == "disarmed"
     assert diagnostics["console"]["protect_version"] == "7.2.105"
+    assert diagnostics["console"]["unifi_os_version"] == "5.1.33"
     assert diagnostics["push"] == {
         "connected": False,
         "last_message_at": None,
@@ -4367,6 +4509,7 @@ async def async_get_config_entry_diagnostics(
                 "name": console.name,
                 "model": console.model,
                 "protect_version": console.protect_version,
+                "unifi_os_version": console.firmware_version,
                 "external_alarm_manager": console.external_alarm_manager,
             },
             "profiles": {
