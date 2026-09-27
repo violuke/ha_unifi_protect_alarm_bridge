@@ -279,3 +279,14 @@ async def test_reconfigure_to_a_different_console_aborts(hass, flow_client) -> N
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "unique_id_mismatch"
     assert entry.data[CONF_HOST] == HOST
+
+
+async def test_unknown_global_mode_flag_does_not_block_setup(hass, flow_client) -> None:
+    flow_client.async_get_console_info.return_value = replace(
+        CONSOLE, external_alarm_manager=None
+    )
+    result = await _start_user_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY

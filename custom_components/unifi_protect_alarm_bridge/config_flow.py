@@ -150,7 +150,7 @@ async def async_validate_connection(
     client = UniFiAlarmClient(session, host, username, password)
     try:
         console = await client.async_get_console_info()
-        if not console.external_alarm_manager:
+        if console.external_alarm_manager is False:
             raise CannotValidate("global_mode_off")
         profiles = await client.async_get_profiles()
     except AuthFailed as err:

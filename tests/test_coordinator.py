@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, create_autospec
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
@@ -24,6 +25,7 @@ from custom_components.unifi_protect_alarm_bridge.api import (
     CannotConnect,
     InsufficientPermissions,
     MfaRequired,
+    RateLimited,
     UnexpectedResponse,
     UniFiAlarmClient,
 )
@@ -37,6 +39,7 @@ from custom_components.unifi_protect_alarm_bridge.const import (
     POLL_INTERVAL_PUSH_DOWN,
     POLL_INTERVAL_PUSH_HEALTHY,
     PROMOTION_MAX_OVERDUE,
+    RATE_LIMIT_RETRY_AFTER,
 )
 from custom_components.unifi_protect_alarm_bridge.coordinator import (
     UniFiAlarmCoordinator,
@@ -446,3 +449,24 @@ async def test_delete_entry_issues(hass, coordinator, client) -> None:
     async_delete_entry_issues(hass, coordinator.config_entry.entry_id)
 
     assert _issue(hass, coordinator, ISSUE_NOT_SUPER_ADMIN) is None
+
+
+async def test_rate_limited_poll_backs_off(coordinator, client) -> None:
+    """A rate-limited console must not get a login attempt on every poll."""
+    client.async_get_profiles.side_effect = RateLimited("x")
+    with pytest.raises(UpdateFailed) as err:
+        await coordinator._async_update_data()
+    assert err.value.retry_after == RATE_LIMIT_RETRY_AFTER
+
+
+async def test_unknown_global_mode_flag_raises_api_changed(
+    hass, coordinator, client
+) -> None:
+    client.async_get_profiles.side_effect = UnexpectedResponse("x")
+    client.async_get_console_info.return_value = replace(
+        CONSOLE, external_alarm_manager=None
+    )
+    await coordinator.async_refresh()
+
+    assert _issue(hass, coordinator, ISSUE_API_CHANGED) is not None
+    assert _issue(hass, coordinator, ISSUE_GLOBAL_MODE_OFF) is None

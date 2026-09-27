@@ -45,6 +45,7 @@ from .const import (
     PROMOTION_MAX_OVERDUE,
     PROMOTION_MIN_DELAY_SECONDS,
     PUSH_UNAVAILABLE_AFTER,
+    RATE_LIMIT_RETRY_AFTER,
     REDACT_KEYS,
     STATE_ARMING,
 )
@@ -147,7 +148,10 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         except InsufficientPermissions as err:
             self._create_issue(ISSUE_NOT_SUPER_ADMIN)
             raise UpdateFailed(str(err)) from err
-        except (CannotConnect, RateLimited) as err:
+        except RateLimited as err:
+            # Every poll would otherwise be another login against a lockout.
+            raise UpdateFailed(str(err), retry_after=RATE_LIMIT_RETRY_AFTER) from err
+        except CannotConnect as err:
             raise UpdateFailed(str(err)) from err
         except UnexpectedResponse as err:
             await self._async_handle_unexpected(err)
@@ -177,7 +181,7 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
             console = await self.client.async_get_console_info()
         except UniFiAlarmError:
             return False
-        if console.external_alarm_manager:
+        if console.external_alarm_manager is not False:
             self._delete_issue(ISSUE_GLOBAL_MODE_OFF)
             return False
         self._create_issue(ISSUE_GLOBAL_MODE_OFF)

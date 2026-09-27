@@ -62,9 +62,13 @@ def _parse_timestamp(value: Any, payload: Any) -> datetime | None:
     if not isinstance(value, str):
         raise UnexpectedResponse("timestamp is not a string", payload)
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError as err:
         raise UnexpectedResponse(f"invalid timestamp {value!r}", payload) from err
+    if parsed.tzinfo is None:
+        # A naive time can't be compared with HA's aware clock; treat it as drift.
+        raise UnexpectedResponse(f"timestamp {value!r} has no UTC offset", payload)
+    return parsed
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +133,8 @@ class ConsoleInfo:
     model: str | None
     protect_version: str | None
     firmware_version: str | None
-    external_alarm_manager: bool
+    # None when the console doesn't report the flag, so drift isn't read as "off".
+    external_alarm_manager: bool | None
 
     @classmethod
     def from_api(cls, data: Any) -> ConsoleInfo:
@@ -143,13 +148,16 @@ class ConsoleInfo:
         flags = flags if isinstance(flags, dict) else {}
         model, version = data.get("type"), data.get("version")
         firmware = data.get("firmwareVersion")
+        global_mode = flags.get("useExternalAlarmManager")
         return cls(
             mac=mac,
             name=name,
             model=model if isinstance(model, str) else None,
             protect_version=version if isinstance(version, str) else None,
             firmware_version=firmware if isinstance(firmware, str) else None,
-            external_alarm_manager=flags.get("useExternalAlarmManager") is True,
+            external_alarm_manager=(
+                global_mode if isinstance(global_mode, bool) else None
+            ),
         )
 
 
@@ -173,6 +181,9 @@ class UniFiAlarmClient:
         self._password = password
         self._csrf_token: str | None = None
         self._generation = 0
+        # Session generation in which a 403 survived a re-login; later 403s in
+        # the same generation are trusted without logging in again.
+        self._forbidden_generation: int | None = None
         self._login_lock = asyncio.Lock()
 
     @property
@@ -275,9 +286,10 @@ class UniFiAlarmClient:
         if fresh:
             await self.async_login(stale_generation=self._generation)
         status, generation, payload = await self._send(method, path)
-        if fresh and status == 403:
-            # A 403 on GET /profiles right after a fresh login means the account
-            # is not Super Admin, not a stale CSRF token: don't waste a login on it.
+        if status == 403 and (fresh or generation == self._forbidden_generation):
+            # A 403 right after a fresh login, or one that already survived a
+            # re-login in this session, means the account is not Super Admin, not
+            # a stale CSRF token: don't spend a login on it.
             raise InsufficientPermissions(
                 f"{method} {path} is forbidden for this account"
             )
@@ -292,6 +304,7 @@ class UniFiAlarmClient:
                 f"{method} {path} is still unauthorised after a fresh login", payload
             )
         if status == 403:
+            self._forbidden_generation = self._generation
             raise InsufficientPermissions(
                 f"{method} {path} is forbidden for this account"
             )

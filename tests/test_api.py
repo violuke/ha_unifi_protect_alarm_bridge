@@ -245,3 +245,32 @@ async def test_ws_url_follows_scheme(http_session) -> None:
 
 async def test_fake_console_is_isolated_per_test(fake_console: FakeConsole) -> None:
     assert fake_console.login_count == 0
+
+
+async def test_console_info_without_the_global_mode_flag_is_unknown(
+    api_client, fake_console
+) -> None:
+    """A missing flag must not be read as "Global mode off" (firmware drift)."""
+    del fake_console.nvr["featureFlags"]
+    info = await api_client.async_get_console_info()
+    assert info.external_alarm_manager is None
+
+
+def test_timestamp_without_utc_offset_is_unexpected() -> None:
+    data = {**profile_json(), "state_set_at": "2026-09-27T13:55:44"}
+    with pytest.raises(UnexpectedResponse):
+        ArmProfile.from_api(data)
+
+
+async def test_persistent_403_is_not_retried_on_every_request(
+    api_client, fake_console
+) -> None:
+    """An account demoted after setup must not cost a login on every poll."""
+    await api_client.async_get_profiles()
+    fake_console.super_admin = False
+
+    for _ in range(3):
+        with pytest.raises(InsufficientPermissions):
+            await api_client.async_get_profiles()
+
+    assert fake_console.login_count == 2  # one re-login, then trusted

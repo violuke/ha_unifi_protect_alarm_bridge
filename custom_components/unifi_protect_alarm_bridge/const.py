@@ -24,6 +24,9 @@ STATE_BREACHED: Final = "breached"
 POLL_INTERVAL_PUSH_HEALTHY: Final = timedelta(seconds=60)
 POLL_INTERVAL_PUSH_DOWN: Final = timedelta(seconds=10)
 PUSH_UNAVAILABLE_AFTER: Final = timedelta(hours=1)
+# Poll delay after the console rate-limits logins (matches the websocket's max
+# backoff), so polling doesn't prolong the lockout.
+RATE_LIMIT_RETRY_AFTER: Final = 300.0
 
 # One-off refresh when an exit delay ends (state_promotion_due_at).
 PROMOTION_GRACE_SECONDS: Final = 2.0
