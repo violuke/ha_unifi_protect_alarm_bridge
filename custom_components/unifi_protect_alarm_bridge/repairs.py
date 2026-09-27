@@ -31,6 +31,8 @@ class ProfileMissingRepairFlow(RepairsFlow):
         if entry is None or entry.state is not ConfigEntryState.LOADED:
             return self.async_abort(reason="not_loaded")
         profiles = list(entry.runtime_data.data.values())
+        if not profiles:
+            return self.async_abort(reason="no_profiles")
         errors: dict[str, str] = {}
         if user_input is not None and not (errors := validate_mapping(user_input)):
             self.hass.config_entries.async_update_entry(

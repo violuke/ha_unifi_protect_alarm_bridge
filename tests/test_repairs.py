@@ -54,6 +54,19 @@ async def test_profile_missing_fix_flow(hass, mock_client) -> None:
     assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
 
 
+async def test_fix_flow_aborts_when_no_profiles(hass, mock_client) -> None:
+    entry = mock_config_entry()
+    await setup_entry(hass, entry)
+    entry.runtime_data.data = {}
+    issue_id = f"{ISSUE_PROFILE_MISSING}_{entry.entry_id}"
+
+    flow = await _start(hass, issue_id, {"entry_id": entry.entry_id})
+    result = await flow.async_step_init()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_profiles"
+
+
 async def test_fix_flow_aborts_when_entry_not_loaded(hass) -> None:
     entry = mock_config_entry()
     entry.add_to_hass(hass)

@@ -46,3 +46,14 @@ async def test_options_flow_needs_a_loaded_entry(hass) -> None:
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "not_loaded"
+
+
+async def test_options_flow_aborts_when_no_profiles(hass, mock_client) -> None:
+    entry = mock_config_entry()
+    await setup_entry(hass, entry)
+    entry.runtime_data.data = {}
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_profiles"

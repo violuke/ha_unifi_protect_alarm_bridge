@@ -76,7 +76,8 @@
       "duplicate_profile": "Each profile can only be used for one arm mode."
     },
     "abort": {
-      "not_loaded": "The integration must be running to change the arm mode mapping."
+      "not_loaded": "The integration must be running to change the arm mode mapping.",
+      "no_profiles": "No arm profiles found on the console. Create one in Protect's Alarm Manager first."
     }
   },
   "issues": {
@@ -114,7 +115,8 @@
           "duplicate_profile": "Each profile can only be used for one arm mode."
         },
         "abort": {
-          "not_loaded": "The integration must be running to fix this."
+          "not_loaded": "The integration must be running to fix this.",
+          "no_profiles": "No arm profiles found on the console. Create one in Protect's Alarm Manager first."
         }
       }
     }
@@ -128,6 +130,9 @@
     },
     "disarm_failed": {
       "message": "Failed to disarm {profile}: {error}"
+    },
+    "disarm_first": {
+      "message": "The alarm is triggered. Disarm it before arming again."
     }
   }
 }

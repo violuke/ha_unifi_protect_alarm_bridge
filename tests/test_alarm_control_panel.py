@@ -156,6 +156,19 @@ async def test_arm_again_while_active_is_a_no_op(hass, mock_client, state) -> No
     mock_client.async_arm.assert_not_awaited()
 
 
+async def test_arm_while_target_is_breached_raises_disarm_first(
+    hass, mock_client
+) -> None:
+    mock_client.async_get_profiles.return_value = [make_profile(state="breached")]
+    await setup_entry(hass, mock_config_entry())
+
+    with pytest.raises(HomeAssistantError) as err:
+        await _call(hass, "alarm_arm_away")
+
+    assert err.value.translation_key == "disarm_first"
+    mock_client.async_arm.assert_not_awaited()
+
+
 async def test_arm_disarms_other_active_profiles_first(hass, mock_client) -> None:
     mock_client.async_get_profiles.return_value = [
         make_profile(),

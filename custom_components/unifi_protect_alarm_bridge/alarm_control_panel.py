@@ -186,8 +186,12 @@ class UniFiAlarmPanel(
         for other in list(self._profiles.values()):
             if other.id != target.id and other.state != STATE_DISARMED:
                 await self.coordinator.async_disarm_profile(other.id)
+        if target.state == STATE_BREACHED:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="disarm_first"
+            )
         if target.state != STATE_DISARMED:
-            return  # already arming/armed/breached: a second press does nothing
+            return  # already arming/armed: a second press does nothing
         await self.coordinator.async_arm_profile(target.id)
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
