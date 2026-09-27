@@ -1,4 +1,21 @@
+# Local secrets and captures
 .env
 .env.*
 !.env.example
+*.har
 probe_output/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv*/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local Home Assistant dev instance (scripts/develop)
+config/*
+!config/configuration.yaml
+
+.DS_Store

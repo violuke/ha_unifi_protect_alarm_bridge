@@ -1,0 +1,12 @@
+{
+  "domain": "unifi_protect_alarm_bridge",
+  "name": "UniFi Protect Alarm Bridge",
+  "codeowners": ["@violuke"],
+  "config_flow": true,
+  "documentation": "https://github.com/violuke/ha_unifi_protect_alarm_bridge",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/violuke/ha_unifi_protect_alarm_bridge/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
