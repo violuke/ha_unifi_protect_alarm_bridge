@@ -6,9 +6,15 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import aiohttp
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigEntryState,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import (
@@ -179,6 +185,12 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> UniFiAlarmOptionsFlow:
+        """Return the options flow."""
+        return UniFiAlarmOptionsFlow()
+
     def __init__(self) -> None:
         """Initialise flow state."""
         self._data: dict[str, Any] = {}
@@ -309,5 +321,26 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(
                 STEP_RECONFIGURE_SCHEMA, user_input or entry.data
             ),
+            errors=errors,
+        )
+
+
+class UniFiAlarmOptionsFlow(OptionsFlowWithReload):
+    """Change which Protect profile each arm mode uses."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show the mapping form with the console's current profiles."""
+        entry = self.config_entry
+        if entry.state is not ConfigEntryState.LOADED:
+            return self.async_abort(reason="not_loaded")
+        profiles = list(entry.runtime_data.data.values())
+        errors: dict[str, str] = {}
+        if user_input is not None and not (errors := validate_mapping(user_input)):
+            return self.async_create_entry(data=mapping_from_input(user_input))
+        return self.async_show_form(
+            step_id="init",
+            data_schema=profiles_schema(profiles, user_input or entry.options),
             errors=errors,
         )
