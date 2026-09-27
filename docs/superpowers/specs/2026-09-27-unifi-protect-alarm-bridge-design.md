@@ -64,6 +64,7 @@ All requests go to `https://<host>`. Consoles use self-signed certificates.
   - an 8-byte header (`>BBBBI`): packet type, payload format [1=JSON, 2=UTF-8, 3=buffer], deflated flag, reserved, payload size
   - then the payload, zlib-compressed if the deflated flag is set
 - **Relevant message:** action `{"action": "update", "modelKey": "externalArmProfile", "id": "<profile id>"}`, whose data frame is the **full profile object** in the same shape as REST.
+- **The pushed profile omits `state_promotion_due_at`** (verified live 2026-09-27). The coordinator derives it as `state_set_at + activation_delay` for `arming` profiles.
 - **Also observed:** `add:event` with `type: "arming"` and `metadata.armProfileId`. This is not needed, because the profile update is the source of truth.
 - **Volume:** the socket is busy, with about 180 messages per 100 s on the test site. Anything that is not `externalArmProfile` is discarded as soon as its action frame has been read.
 
@@ -79,6 +80,13 @@ All requests go to `https://<host>`. Consoles use self-signed certificates.
 - **Unique ID:** `nvr.mac`, as above.
 - **`lastUpdateId`:** `ws/updates` connects and streams without it (verified), so bootstrap is never fetched.
 - **Global mode off:** detected with `featureFlags.useExternalAlarmManager == false` rather than by guessing at the shape of `/profiles`.
+
+### Verified on the real console (2026-09-27)
+- Setup with a local Super Admin account.
+- Websocket push connected.
+- HA arm → `arming` instantly, `armed` at +60 s via push; disarm instant.
+- Arm/disarm from the Protect app reached HA within the same second.
+- Websocket pushes lack `state_promotion_due_at` (handled — see §3 "Push" above).
 
 ### Not yet verified (resolve during the build; see §11)
 1. **The `breached` payload.** It is deliberately not triggered on a live system, and is assumed to follow the UI enum.
