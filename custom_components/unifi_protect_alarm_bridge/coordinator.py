@@ -40,6 +40,7 @@ from .const import (
     LOGGER,
     POLL_INTERVAL_PUSH_DOWN,
     POLL_INTERVAL_PUSH_HEALTHY,
+    POLL_INTERVAL_SHARED,
     PROFILE_OPTION_KEYS,
     PROMOTION_GRACE_SECONDS,
     PROMOTION_MAX_OVERDUE,
@@ -95,6 +96,8 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         entry: UniFiAlarmConfigEntry,
         client: UniFiAlarmClient,
         console: ConsoleInfo,
+        *,
+        use_push: bool = True,
     ) -> None:
         """Create the coordinator; call async_start_push() after the first refresh."""
         super().__init__(
@@ -102,17 +105,23 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
             LOGGER,
             config_entry=entry,
             name=DOMAIN,
-            update_interval=POLL_INTERVAL_PUSH_DOWN,
+            update_interval=(
+                POLL_INTERVAL_PUSH_DOWN if use_push else POLL_INTERVAL_SHARED
+            ),
             always_update=False,
         )
         self.client = client
         self.console = console
-        self.listener = ProtectUpdatesListener(
-            client,
-            on_profile=self.handle_profile,
-            on_connection_change=self.handle_connection_change,
-            on_resync=self.handle_resync,
-            on_auth_failed=self.handle_auth_failed,
+        self.listener = (
+            ProtectUpdatesListener(
+                client,
+                on_profile=self.handle_profile,
+                on_connection_change=self.handle_connection_change,
+                on_resync=self.handle_resync,
+                on_auth_failed=self.handle_auth_failed,
+            )
+            if use_push
+            else None
         )
         self.last_poll_success_at: datetime | None = None
         self.last_unexpected_payload: Any = None
@@ -128,6 +137,8 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
     @callback
     def async_start_push(self) -> None:
         """Run the websocket listener until the entry unloads."""
+        if self.listener is None:
+            return
         self.config_entry.async_create_background_task(
             self.hass,
             self.listener.run(),
@@ -288,7 +299,8 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
 
     def _check_push_issue(self) -> None:
         if (
-            self._push_down_since is not None
+            self.listener is not None
+            and self._push_down_since is not None
             and dt_util.utcnow() - self._push_down_since > PUSH_UNAVAILABLE_AFTER
         ):
             self._create_issue(

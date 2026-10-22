@@ -13,6 +13,10 @@
         "data_description": {
           "host": "IP address or hostname of the UniFi console running Protect.",
           "verify_ssl": "Leave this off unless the console has a certificate Home Assistant trusts."
+        },
+        "menu_options": {
+          "existing": "Use an existing Protect connection",
+          "manual": "Use a dedicated account"
         }
       },
       "profiles": {
@@ -39,6 +43,31 @@
           "host": "Host",
           "verify_ssl": "Verify SSL certificate"
         }
+      },
+      "manual": {
+        "title": "Connect to your UniFi console",
+        "description": "Use a dedicated local-only UniFi OS account with the Super Admin role and no two-factor authentication. Alarm Manager is not available to custom roles.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the UniFi console running Protect.",
+          "verify_ssl": "Leave this off unless the console has a certificate Home Assistant trusts."
+        }
+      },
+      "existing": {
+        "title": "Use your existing Protect connection",
+        "description": "Reuse the official UniFi Protect integration's authenticated session. No second password is stored. Alarm controls use that account's existing permissions.",
+        "data": {
+          "source_entry_id": "Protect connection",
+          "certificate_fingerprint": "Trusted certificate SHA-256 (optional)"
+        },
+        "data_description": {
+          "certificate_fingerprint": "For a self-signed console certificate, enter its independently verified SHA-256 fingerprint. Leave empty to use normal certificate verification."
+        }
       }
     },
     "error": {
@@ -50,14 +79,17 @@
       "global_mode_off": "Protect's Alarm Manager is not in Global mode on this console.",
       "no_profiles": "No arm profiles found. Create one in Protect's Alarm Manager first.",
       "duplicate_profile": "Each profile can only be used for one arm mode.",
-      "unknown": "Unexpected error. Check the Home Assistant logs."
+      "unknown": "Unexpected error. Check the Home Assistant logs.",
+      "invalid_fingerprint": "Enter a 64-character SHA-256 certificate fingerprint."
     },
     "abort": {
       "already_configured": "This console is already configured.",
       "already_in_progress": "Setup for this console is already in progress.",
       "reauth_successful": "Re-authentication was successful.",
       "reconfigure_successful": "Reconfiguration was successful.",
-      "unique_id_mismatch": "These details belong to a different console than the one originally configured."
+      "unique_id_mismatch": "These details belong to a different console than the one originally configured.",
+      "source_missing": "Set up the official UniFi Protect connection first.",
+      "repair_source": "Restore the existing UniFi Protect connection, then reload this integration."
     }
   },
   "options": {

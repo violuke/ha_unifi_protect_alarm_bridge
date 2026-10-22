@@ -1,6 +1,7 @@
 {
   "domain": "unifi_protect_alarm_bridge",
   "name": "UniFi Protect Alarm Bridge",
+  "after_dependencies": ["unifiprotect"],
   "codeowners": ["@violuke"],
   "config_flow": true,
   "documentation": "https://github.com/violuke/ha_unifi_protect_alarm_bridge",

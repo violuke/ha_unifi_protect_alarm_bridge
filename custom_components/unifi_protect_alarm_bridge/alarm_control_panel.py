@@ -81,7 +81,9 @@ class UniFiAlarmPanel(
             name=console.name,
             model=console.model,
             sw_version=console.protect_version,
-            configuration_url=f"https://{entry.data[CONF_HOST]}",
+            configuration_url=(
+                f"https://{entry.data[CONF_HOST]}" if CONF_HOST in entry.data else None
+            ),
         )
         self._mode_profiles = {
             mode: profile_id

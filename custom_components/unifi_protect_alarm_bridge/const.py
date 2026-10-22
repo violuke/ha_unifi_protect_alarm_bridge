@@ -7,6 +7,9 @@ from typing import Final
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 
 DOMAIN: Final = "unifi_protect_alarm_bridge"
+CONF_SOURCE_ENTRY_ID: Final = "source_entry_id"
+CONF_CERTIFICATE_FINGERPRINT: Final = "certificate_fingerprint"
+POLL_INTERVAL_SHARED: Final = timedelta(seconds=15)
 LOGGER = logging.getLogger(__package__)
 
 CONF_PROFILE_AWAY: Final = "profile_away"
@@ -53,6 +56,8 @@ ISSUE_TRACKER_URL: Final = (
 # console names can contain people's names or addresses. Session tokens and
 # cookies are also removed.
 REDACT_KEYS: Final = {
+    CONF_SOURCE_ENTRY_ID,
+    CONF_CERTIFICATE_FINGERPRINT,
     CONF_HOST,
     CONF_USERNAME,
     CONF_PASSWORD,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import re
 from typing import Any
 
 import aiohttp
@@ -40,13 +41,16 @@ from .api import (
     UniFiAlarmClient,
 )
 from .const import (
+    CONF_CERTIFICATE_FINGERPRINT,
     CONF_PROFILE_AWAY,
     CONF_PROFILE_HOME,
     CONF_PROFILE_NIGHT,
+    CONF_SOURCE_ENTRY_ID,
     DOMAIN,
     LOGGER,
     PROFILE_OPTION_KEYS,
 )
+from .shared import SharedProtectClient
 
 _PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
@@ -81,6 +85,13 @@ def normalize_host(raw: str) -> str:
     if value.count(":") > 1 and not value.startswith("["):
         value = f"[{value}]"  # bare IPv6 literal
     return value
+
+
+def normalize_fingerprint(value: str) -> str:
+    fingerprint = re.sub(r"[:\s]", "", value).lower()
+    if fingerprint and not re.fullmatch(r"[a-f0-9]{64}", fingerprint):
+        raise CannotValidate("invalid_fingerprint")
+    return fingerprint
 
 
 def profiles_schema(
@@ -200,7 +211,25 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for the console and a Super Admin account."""
+        """Offer session reuse while retaining dedicated-account setup."""
+        if user_input is None and self.hass.config_entries.async_entries(
+            "unifiprotect"
+        ):
+            return self.async_show_menu(
+                step_id="user", menu_options=["existing", "manual"]
+            )
+        return await self._async_step_account(user_input, "user")
+
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Configure a dedicated account even when Protect is already installed."""
+        return await self._async_step_account(user_input, "manual")
+
+    async def _async_step_account(
+        self, user_input: dict[str, Any] | None, step_id: str
+    ) -> ConfigFlowResult:
+        """Keep dedicated-account setup and TLS preferences unchanged."""
         errors: dict[str, str] = {}
         if user_input is not None:
             data = {**user_input, CONF_HOST: normalize_host(user_input[CONF_HOST])}
@@ -226,11 +255,84 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
                     return self._async_create({CONF_PROFILE_AWAY: profiles[0].id})
                 return await self.async_step_profiles()
         return self.async_show_form(
-            step_id="user",
+            step_id=step_id,
             data_schema=self.add_suggested_values_to_schema(
                 STEP_USER_SCHEMA,
                 {k: v for k, v in (user_input or {}).items() if k != CONF_PASSWORD},
             ),
+            errors=errors,
+        )
+
+    async def async_step_existing(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reuse an existing session without reading its stored credentials."""
+        sources = self.hass.config_entries.async_entries("unifiprotect")
+        if not sources:
+            return self.async_abort(reason="source_missing")
+        errors = {}
+        if user_input is not None:
+            try:
+                data = {
+                    CONF_SOURCE_ENTRY_ID: user_input[CONF_SOURCE_ENTRY_ID],
+                    CONF_CERTIFICATE_FINGERPRINT: normalize_fingerprint(
+                        user_input.get(CONF_CERTIFICATE_FINGERPRINT, "")
+                    ),
+                }
+                client = SharedProtectClient(
+                    self.hass,
+                    data[CONF_SOURCE_ENTRY_ID],
+                    data[CONF_CERTIFICATE_FINGERPRINT],
+                )
+                console = await client.async_get_console_info()
+                if console.external_alarm_manager is not True:
+                    raise CannotValidate("global_mode_off")
+                profiles = await client.async_get_profiles()
+                if not profiles:
+                    raise CannotValidate("no_profiles")
+            except CannotValidate as err:
+                errors["base"] = err.error
+            except InsufficientPermissions:
+                errors["base"] = "not_super_admin"
+            except RateLimited:
+                errors["base"] = "rate_limited"
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except UnexpectedResponse:
+                errors["base"] = "unknown"
+            else:
+                await self.async_set_unique_id(format_mac(console.mac))
+                if self.source == "reconfigure":
+                    entry = self._get_reconfigure_entry()
+                    self._abort_if_unique_id_mismatch()
+                    return self.async_update_reload_and_abort(entry, data_updates=data)
+                self._abort_if_unique_id_configured()
+                self._data, self._title, self._profiles = data, console.name, profiles
+                if len(profiles) == 1:
+                    return self._async_create({CONF_PROFILE_AWAY: profiles[0].id})
+                return await self.async_step_profiles()
+        suggested = dict(user_input or {})
+        if user_input is None and self.source == "reconfigure":
+            suggested = dict(self._get_reconfigure_entry().data)
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_SOURCE_ENTRY_ID,
+                    default=suggested.get(CONF_SOURCE_ENTRY_ID, sources[0].entry_id),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            {"value": e.entry_id, "label": e.title} for e in sources
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(CONF_CERTIFICATE_FINGERPRINT): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="existing",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
             errors=errors,
         )
 
@@ -256,6 +358,8 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
         """Start re-authentication after the console rejected the credentials."""
+        if CONF_SOURCE_ENTRY_ID in entry_data:
+            return self.async_abort(reason="repair_source")
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
@@ -296,6 +400,8 @@ class UniFiAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Change the host or SSL verification of the same console."""
         entry = self._get_reconfigure_entry()
+        if CONF_SOURCE_ENTRY_ID in entry.data:
+            return await self.async_step_existing(user_input)
         errors: dict[str, str] = {}
         if user_input is not None:
             updates = {
