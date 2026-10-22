@@ -11,7 +11,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.device_registry import format_mac
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.redact import async_redact_data
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -102,11 +103,15 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
             LOGGER,
             config_entry=entry,
             name=DOMAIN,
-            update_interval=POLL_INTERVAL_PUSH_DOWN,
-            always_update=False,
+            update_interval=None,
+            # Poll freshness is an entity attribute even when profiles are equal.
+            always_update=True,
         )
         self.client = client
         self.console = console
+        self.poll_interval = POLL_INTERVAL_PUSH_DOWN
+        self._poll_unsub: CALLBACK_TYPE | None = None
+        self._poll_not_before: datetime | None = None
         self.listener = ProtectUpdatesListener(
             client,
             on_profile=self.handle_profile,
@@ -120,6 +125,7 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         # Stale-write guard: pushes and action responses stamp the profiles they
         # write, and a poll ignores any profile stamped after the poll started.
         self._write_seq = 0
+        self._last_poll_seq = 0
         self._written_seq: dict[str, int] = {}
         self._promotion_unsub: CALLBACK_TYPE | None = None
         self._overdue_counts: dict[str, int] = {}
@@ -127,7 +133,8 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
 
     @callback
     def async_start_push(self) -> None:
-        """Run the websocket listener until the entry unloads."""
+        """Start independent polling and, for dedicated sessions, push updates."""
+        self._start_polling()
         self.config_entry.async_create_background_task(
             self.hass,
             self.listener.run(),
@@ -137,11 +144,44 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
     async def async_shutdown(self) -> None:
         """Cancel timers on unload."""
         self._cancel_promotion()
+        if self._poll_unsub is not None:
+            self._poll_unsub()
+            self._poll_unsub = None
         await super().async_shutdown()
 
+    @callback
+    def _start_polling(self) -> None:
+        if self._poll_unsub is not None:
+            self._poll_unsub()
+        self._poll_unsub = async_track_time_interval(
+            self.hass, self._poll_tick, self.poll_interval
+        )
+
+    async def _poll_tick(self, _now: datetime) -> None:
+        if self._poll_not_before and dt_util.utcnow() < self._poll_not_before:
+            return
+        await self.async_request_refresh()
+
     async def _async_update_data(self) -> dict[str, ArmProfile]:
+        if (
+            self._poll_not_before
+            and (
+                remaining := (self._poll_not_before - dt_util.utcnow()).total_seconds()
+            )
+            > 0
+        ):
+            raise UpdateFailed(
+                "Protect is limiting alarm requests",
+                retry_after=max(1, int(remaining) + 1),
+            )
         seq_at_start = self._write_seq
         try:
+            console = await self.client.async_get_console_info()
+            if self.config_entry.unique_id != format_mac(console.mac):
+                raise UpdateFailed("The Protect console identity has changed")
+            if console.external_alarm_manager is not True:
+                self._create_issue(ISSUE_GLOBAL_MODE_OFF)
+                raise UpdateFailed("Protect Global Alarm Manager cannot be verified")
             profiles = await self.client.async_get_profiles()
         except (AuthFailed, MfaRequired) as err:
             raise ConfigEntryAuthFailed(str(err)) from err
@@ -149,6 +189,9 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
             self._create_issue(ISSUE_NOT_SUPER_ADMIN)
             raise UpdateFailed(str(err)) from err
         except RateLimited as err:
+            self._poll_not_before = dt_util.utcnow() + timedelta(
+                seconds=RATE_LIMIT_RETRY_AFTER
+            )
             # Every poll would otherwise be another login against a lockout.
             raise UpdateFailed(str(err), retry_after=RATE_LIMIT_RETRY_AFTER) from err
         except CannotConnect as err:
@@ -156,8 +199,10 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         except UnexpectedResponse as err:
             await self._async_handle_unexpected(err)
             raise UpdateFailed(str(err)) from err
-        if not profiles and await self._async_global_mode_off():
-            raise UpdateFailed("Protect Alarm Manager is not in Global mode")
+        if not profiles:
+            raise UpdateFailed("Protect returned no alarm profiles")
+        self.console = console
+        self._poll_not_before = None
 
         for key in (ISSUE_NOT_SUPER_ADMIN, ISSUE_API_CHANGED, ISSUE_GLOBAL_MODE_OFF):
             self._delete_issue(key)
@@ -170,6 +215,12 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
                 merged[profile.id] = current[profile.id]  # newer push/action wins
             else:
                 merged[profile.id] = profile
+        # A newly discovered profile may not exist in the in-flight snapshot.
+        for profile_id, profile in current.items():
+            if self._written_seq.get(profile_id, 0) > seq_at_start:
+                merged[profile_id] = profile
+        self._write_seq += 1
+        self._last_poll_seq = self._write_seq
         self.last_poll_success_at = dt_util.utcnow()
         self._check_profile_mapping(merged)
         self._check_push_issue()
@@ -212,6 +263,22 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         """Apply a pushed or action-returned profile immediately."""
         if self._shutdown_requested:
             return  # a push arriving during unload must not start new timers
+        current = (self.data or {}).get(profile.id)
+        if not self.last_update_success:
+            self.handle_resync()
+            return
+        if (
+            current is not None
+            and current.state_set_at is not None
+            and profile.state_set_at is not None
+            and profile.state_set_at < current.state_set_at
+        ):
+            return
+        if current is not None and (
+            current.state_set_at is None or profile.state_set_at is None
+        ):
+            self.handle_resync()
+            return
         profile = _derive_missing_promotion_due_at(profile)
         self._write_seq += 1
         self._written_seq[profile.id] = self._write_seq
@@ -226,12 +293,14 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         if connected:
             self._push_down_since = None
             self._delete_issue(ISSUE_PUSH_UNAVAILABLE)
-            self.update_interval = POLL_INTERVAL_PUSH_HEALTHY
+            self.poll_interval = POLL_INTERVAL_PUSH_HEALTHY
         else:
             self._push_down_since = dt_util.utcnow()
-            self.update_interval = POLL_INTERVAL_PUSH_DOWN
-        # Setting update_interval doesn't reschedule the pending timer; a refresh
-        # does, and it also catches changes made while the socket was down.
+            self.poll_interval = POLL_INTERVAL_PUSH_DOWN
+        if self._poll_unsub is not None:
+            self._start_polling()
+        # Catch changes made while the socket was down without postponing the
+        # independent polling timer.
         self.handle_resync()
 
     @callback
@@ -244,20 +313,31 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
     @callback
     def handle_auth_failed(self) -> None:
         """The websocket's re-login failed: ask the user for new credentials."""
+        self.last_update_success = False
+        self.async_update_listeners()
         self.config_entry.async_start_reauth(self.hass)
 
     async def async_arm_profile(self, profile_id: str) -> None:
         """Arm a profile and apply the console's response."""
+        seq = self._write_seq
         profile = await self._async_run_action(
             self.client.async_arm, profile_id, "arm_failed"
         )
-        self.handle_profile(profile)
+        self._apply_action_response(profile, seq)
 
     async def async_disarm_profile(self, profile_id: str) -> None:
         """Disarm a profile and apply the console's response."""
+        seq = self._write_seq
         profile = await self._async_run_action(
             self.client.async_disarm, profile_id, "disarm_failed"
         )
+        self._apply_action_response(profile, seq)
+
+    @callback
+    def _apply_action_response(self, profile: ArmProfile, started_seq: int) -> None:
+        if max(self._last_poll_seq, self._written_seq.get(profile.id, 0)) > started_seq:
+            self.handle_resync()
+            return
         self.handle_profile(profile)
 
     async def _async_run_action(
@@ -269,10 +349,24 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         known = (self.data or {}).get(profile_id)
         title = known.title if known else profile_id
         try:
-            return await action(profile_id)
+            profile = await action(profile_id)
+            expected = (
+                {"arming", "armed"} if translation_key == "arm_failed" else {"disarmed"}
+            )
+            if profile.id != profile_id or profile.state not in expected:
+                raise UnexpectedResponse("The alarm action was not confirmed")
+            return profile
         except UniFiAlarmError as err:
+            self.last_update_success = False
+            self.async_update_listeners()
+            if isinstance(err, RateLimited):
+                self._poll_not_before = dt_util.utcnow() + timedelta(
+                    seconds=RATE_LIMIT_RETRY_AFTER
+                )
             if isinstance(err, (AuthFailed, MfaRequired)):
                 self.config_entry.async_start_reauth(self.hass)
+            else:
+                self.handle_resync()
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key=translation_key,

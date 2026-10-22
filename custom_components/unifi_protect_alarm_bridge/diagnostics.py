@@ -23,7 +23,7 @@ async def async_get_config_entry_diagnostics(
     coordinator = entry.runtime_data
     listener = coordinator.listener
     console = coordinator.console
-    interval = coordinator.update_interval
+    interval = coordinator.poll_interval
     return async_redact_data(
         {
             "entry": {"data": dict(entry.data), "options": dict(entry.options)},

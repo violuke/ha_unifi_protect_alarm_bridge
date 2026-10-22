@@ -58,6 +58,10 @@ You can change the mapping later under the integration's **Configure** button.
 
 ### Behaviour worth knowing
 
+- The panel exposes `last_successful_poll` even when profile values are unchanged.
+  Polling continues independently of incoming websocket updates. Unconfirmed
+  status remains unavailable until a complete poll succeeds.
+
 - **Arming from HA respects the profile's exit delay.** The panel shows
   `arming` until Protect reports `armed`.
 - **Arming one mode disarms any other active profile first.**

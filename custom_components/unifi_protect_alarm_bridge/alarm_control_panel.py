@@ -152,6 +152,11 @@ class UniFiAlarmPanel(
             return None
         return {
             "profile_title": profile.title,
+            "last_successful_poll": (
+                self.coordinator.last_poll_success_at.isoformat()
+                if self.coordinator.last_poll_success_at
+                else None
+            ),
             "activation_delay": profile.activation_delay,
             "state_set_at": (
                 profile.state_set_at.isoformat() if profile.state_set_at else None

@@ -78,7 +78,7 @@ async def test_poll_populates_data(coordinator) -> None:
     await coordinator.async_refresh()
     assert coordinator.last_update_success
     assert coordinator.data == {AWAY_ID: make_profile()}
-    assert coordinator.update_interval == POLL_INTERVAL_PUSH_DOWN
+    assert coordinator.poll_interval == POLL_INTERVAL_PUSH_DOWN
     assert coordinator.last_poll_success_at is not None
 
 
@@ -131,12 +131,12 @@ async def test_connection_change_switches_interval_and_resyncs(
 
     coordinator.handle_connection_change(True)
     await hass.async_block_till_done()
-    assert coordinator.update_interval == POLL_INTERVAL_PUSH_HEALTHY
+    assert coordinator.poll_interval == POLL_INTERVAL_PUSH_HEALTHY
     assert client.async_get_profiles.await_count == 2
 
     coordinator.handle_connection_change(False)
     await hass.async_block_till_done()
-    assert coordinator.update_interval == POLL_INTERVAL_PUSH_DOWN
+    assert coordinator.poll_interval == POLL_INTERVAL_PUSH_DOWN
 
 
 @pytest.mark.parametrize("error", [AuthFailed("x"), MfaRequired("x")])
@@ -459,7 +459,7 @@ async def test_rate_limited_poll_backs_off(coordinator, client) -> None:
     assert err.value.retry_after == RATE_LIMIT_RETRY_AFTER
 
 
-async def test_unknown_global_mode_flag_raises_api_changed(
+async def test_unknown_global_mode_flag_blocks_status(
     hass, coordinator, client
 ) -> None:
     client.async_get_profiles.side_effect = UnexpectedResponse("x")
@@ -468,5 +468,6 @@ async def test_unknown_global_mode_flag_raises_api_changed(
     )
     await coordinator.async_refresh()
 
-    assert _issue(hass, coordinator, ISSUE_API_CHANGED) is not None
-    assert _issue(hass, coordinator, ISSUE_GLOBAL_MODE_OFF) is None
+    assert _issue(hass, coordinator, ISSUE_API_CHANGED) is None
+    assert _issue(hass, coordinator, ISSUE_GLOBAL_MODE_OFF) is not None
+    assert not coordinator.last_update_success
