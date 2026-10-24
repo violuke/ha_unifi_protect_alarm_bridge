@@ -131,7 +131,7 @@ async def test_arm_away_uses_the_response(hass, mock_client) -> None:
 
     mock_client.async_arm.assert_awaited_once_with(AWAY_ID)
     assert hass.states.get(ENTITY_ID).state == "arming"
-    assert mock_client.async_get_profiles.await_count == polls
+    assert mock_client.async_get_profiles.await_count == polls + 1
 
 
 async def test_arm_with_no_exit_delay_is_immediately_armed(hass, mock_client) -> None:
@@ -169,17 +169,33 @@ async def test_arm_while_target_is_breached_raises_disarm_first(
     mock_client.async_arm.assert_not_awaited()
 
 
-async def test_arm_disarms_other_active_profiles_first(hass, mock_client) -> None:
+async def test_arm_confirms_disarm_before_switching(hass, mock_client) -> None:
     mock_client.async_get_profiles.return_value = [
         make_profile(),
         make_profile(profile_id=HOME_ID, state="armed"),
     ]
     await setup_entry(hass, mock_config_entry(TWO_MODES))
 
+    calls = []
+
+    async def disarm(pid):
+        calls.append(("disarm", pid))
+        mock_client.async_get_profiles.return_value = [
+            make_profile(),
+            make_profile(profile_id=HOME_ID),
+        ]
+        return make_profile(profile_id=pid)
+
+    async def arm(pid):
+        calls.append(("arm", pid))
+        assert mock_client.async_get_profiles.await_count == 3
+        return make_profile(profile_id=pid, state="arming")
+
+    mock_client.async_disarm.side_effect = disarm
+    mock_client.async_arm.side_effect = arm
     await _call(hass, "alarm_arm_away")
 
-    mock_client.async_disarm.assert_awaited_once_with(HOME_ID)
-    mock_client.async_arm.assert_awaited_once_with(AWAY_ID)
+    assert calls == [("disarm", HOME_ID), ("arm", AWAY_ID)]
     assert hass.states.get(ENTITY_ID).state == "arming"
 
 
@@ -203,13 +219,15 @@ async def test_arm_failure_raises(hass, mock_client) -> None:
     assert err.value.translation_key == "arm_failed"
 
 
-async def test_disarm_when_already_disarmed_is_a_no_op(hass, mock_client) -> None:
+async def test_explicit_disarm_reaches_already_disarmed_profiles(
+    hass, mock_client
+) -> None:
     await setup_entry(hass, mock_config_entry())
     assert hass.states.get(ENTITY_ID).state == "disarmed"
 
     await _call(hass, "alarm_disarm")
 
-    mock_client.async_disarm.assert_not_awaited()
+    mock_client.async_disarm.assert_awaited_once_with(AWAY_ID)
 
 
 async def test_disarm_all_reports_partial_failure(hass, mock_client) -> None:

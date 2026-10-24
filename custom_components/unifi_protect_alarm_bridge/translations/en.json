@@ -133,6 +133,12 @@
     },
     "disarm_first": {
       "message": "The alarm is triggered. Disarm it before arming again."
+    },
+    "mode_switch_failed": {
+      "message": "Could not complete the switch to {profile}. The previous mode may already be disarmed. Check the current alarm status before retrying."
+    },
+    "status_unavailable": {
+      "message": "Cannot verify the current alarm status. No command was sent. Restore the Protect connection and retry."
     }
   }
 }

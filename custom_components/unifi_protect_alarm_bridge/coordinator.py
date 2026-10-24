@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.redact import async_redact_data
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -139,9 +140,23 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         self._cancel_promotion()
         await super().async_shutdown()
 
+    async def async_require_fresh_profiles(self) -> None:
+        """Never make a control decision from a stale or incomplete snapshot."""
+        await self.async_refresh()
+        if not self.last_update_success or not self.data:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="status_unavailable"
+            )
+
     async def _async_update_data(self) -> dict[str, ArmProfile]:
         seq_at_start = self._write_seq
         try:
+            console = await self.client.async_get_console_info()
+            if self.config_entry.unique_id != format_mac(console.mac):
+                raise UpdateFailed("The Protect console identity has changed")
+            if console.external_alarm_manager is not True:
+                self._create_issue(ISSUE_GLOBAL_MODE_OFF)
+                raise UpdateFailed("Protect Global Alarm Manager cannot be verified")
             profiles = await self.client.async_get_profiles()
         except (AuthFailed, MfaRequired) as err:
             raise ConfigEntryAuthFailed(str(err)) from err
@@ -156,8 +171,9 @@ class UniFiAlarmCoordinator(DataUpdateCoordinator[dict[str, ArmProfile]]):
         except UnexpectedResponse as err:
             await self._async_handle_unexpected(err)
             raise UpdateFailed(str(err)) from err
-        if not profiles and await self._async_global_mode_off():
-            raise UpdateFailed("Protect Alarm Manager is not in Global mode")
+        if not profiles:
+            raise UpdateFailed("Protect returned no alarm profiles")
+        self.console = console
 
         for key in (ISSUE_NOT_SUPER_ADMIN, ISSUE_API_CHANGED, ISSUE_GLOBAL_MODE_OFF):
             self._delete_issue(key)

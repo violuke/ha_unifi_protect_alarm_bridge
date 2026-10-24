@@ -58,6 +58,14 @@ You can change the mapping later under the integration's **Configure** button.
 
 ### Behaviour worth knowing
 
+- Mode changes are serialized: disarm other active profiles, confirm their status,
+  then arm the requested profile. A failed switch may leave the previous mode
+  disarmed; check the reported state before retrying. There is no automatic
+  retry or rollback. A triggered alarm requires explicit Disarm.
+- Every command verifies the console identity and Global mode and refreshes the
+  profile list. Explicit Disarm reaches every discovered profile, including
+  profiles last reported as disarmed.
+
 - **Arming from HA respects the profile's exit delay.** The panel shows
   `arming` until Protect reports `armed`.
 - **Arming one mode disarms any other active profile first.**

@@ -459,7 +459,7 @@ async def test_rate_limited_poll_backs_off(coordinator, client) -> None:
     assert err.value.retry_after == RATE_LIMIT_RETRY_AFTER
 
 
-async def test_unknown_global_mode_flag_raises_api_changed(
+async def test_unknown_global_mode_flag_blocks_refresh(
     hass, coordinator, client
 ) -> None:
     client.async_get_profiles.side_effect = UnexpectedResponse("x")
@@ -468,5 +468,6 @@ async def test_unknown_global_mode_flag_raises_api_changed(
     )
     await coordinator.async_refresh()
 
-    assert _issue(hass, coordinator, ISSUE_API_CHANGED) is not None
-    assert _issue(hass, coordinator, ISSUE_GLOBAL_MODE_OFF) is None
+    assert not coordinator.last_update_success
+    assert _issue(hass, coordinator, ISSUE_API_CHANGED) is None
+    assert _issue(hass, coordinator, ISSUE_GLOBAL_MODE_OFF) is not None
